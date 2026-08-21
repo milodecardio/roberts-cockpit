@@ -1,0 +1,5 @@
+cockpit_state.json
+__pycache__/
+*.pyc
+.DS_Store
+.env

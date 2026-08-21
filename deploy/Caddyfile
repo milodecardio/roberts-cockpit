@@ -1,0 +1,3 @@
+cockpit.robert-beckert.de {
+	reverse_proxy 127.0.0.1:8077
+}

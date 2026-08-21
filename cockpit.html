@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Roberts Cockpit – Steuerung & Priorisierung</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#171b2e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cockpit">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <style>
   :root{
     --bg:#0f1220;--panel:#171b2e;--panel2:#1e2440;--line:#2b3357;--txt:#e8ebf7;--mut:#9aa3c7;
@@ -21,13 +29,6 @@
   .btn:hover{border-color:var(--acc)}
   .btn.primary{background:var(--acc);color:#0b1020;border-color:var(--acc);font-weight:600}
   .btn.sm{padding:4px 9px;font-size:12px;border-radius:7px}
-  /* Sync widget */
-  .sync-bar{display:flex;gap:5px;align-items:center}
-  .btn-sync{background:var(--panel2);color:var(--mut);border:1px solid var(--line);padding:4px 9px;border-radius:7px;cursor:pointer;font-size:12px;white-space:nowrap}
-  .btn-sync:hover{border-color:var(--acc);color:var(--txt)}
-  .btn-sync.pull{color:var(--acc)}
-  .btn-sync.push{color:var(--lehre)}
-  #syncStatus{font-size:11.5px;color:var(--mut);min-width:72px}
   /* Nav / Filters */
   nav{display:flex;gap:4px;padding:9px 22px;border-bottom:1px solid var(--line);flex-wrap:wrap;background:var(--panel);align-items:center}
   nav button{background:transparent;border:none;color:var(--mut);padding:7px 13px;border-radius:9px;cursor:pointer;font-size:13.5px}
@@ -65,11 +66,6 @@
   .prio.Hoch{background:rgba(255,122,122,.18);color:var(--hoch)}
   .prio.Mittel{background:rgba(255,204,102,.18);color:var(--mittel)}
   .prio.Niedrig{background:rgba(126,224,166,.16);color:var(--niedrig)}
-  .toolbtn{margin-top:8px;width:100%;background:rgba(110,168,254,.12);border:1px solid var(--acc);color:var(--acc);border-radius:8px;padding:5px;font-size:12px;cursor:pointer;font-weight:600}
-  .toolbtn:hover{background:var(--acc);color:#0b1020}
-  .tool-checks{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
-  .tool-check{display:flex;align-items:center;gap:5px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:5px 9px;cursor:pointer;font-size:12.5px}
-  .tool-check input{accent-color:var(--acc);width:13px;height:13px;cursor:pointer}
   .addcard{width:100%;background:transparent;border:1px dashed var(--line);color:var(--mut);border-radius:9px;padding:7px;cursor:pointer;font-size:12.5px;margin-top:2px}
   .addcard:hover{border-color:var(--acc);color:var(--txt)}
   /* Context tab */
@@ -104,12 +100,6 @@
     <div class="sub">Steuerungs- & Priorisierungs-Cockpit · v2.0</div>
   </div>
   <div class="spacer"></div>
-  <div class="sync-bar">
-    <button class="btn-sync" onclick="checkSync()">🔄 Sync</button>
-    <button class="btn-sync pull" onclick="doPull()">⬇ Pull</button>
-    <button class="btn-sync push" onclick="doPush()">⬆ Push</button>
-    <span id="syncStatus"></span>
-  </div>
   <button class="btn sm" onclick="exportData()">⬇︎ Backup</button>
   <button class="btn sm" onclick="importData()">⬆︎ Import</button>
   <button class="btn sm" onclick="resetData()">↺ Standard</button>
@@ -129,7 +119,6 @@ const COLS=[
 ];
 const CATS={steuer:["Steuer/KSK","var(--steuer)"],lehre:["Lehre & Inhalte","var(--lehre)"],crm:["CRM/Mail-Agent","var(--crm)"],arch:["Architektur/Cockpit","var(--arch)"],finanz:["Finanzen","var(--finanz)"],vision:["Vision","var(--vision)"]};
 const PRIOS=["Hoch","Mittel","Niedrig"];
-const TOOLS={claude:["Claude","🟣"],chatgpt:["ChatGPT (Web)","🟢"],claudecode:["Claude Code","⌨️"],mailcrm:["MailCRM","📧"]};
 
 const SEED=[
   {id:"c1",col:"heute",cat:"steuer",prio:"Hoch",t:"Steuererklärung / Kanzlei Jaklic",note:"Herrn Jaklic telefonisch erreichen; vorbereitete Unterlagen für die Finanzamts-Nachfrage an die Kanzlei senden.",src:"Import: Notizen für heute"},
@@ -220,8 +209,7 @@ let activeView="board",filterCat="alle",searchQ="";
 const VIEWS=[["board","🗂 Kanban"],["ctx","📋 Kontext & Anforderungen"]];
 function renderNav(){
   document.getElementById("nav").innerHTML=
-    VIEWS.map(([id,l])=>`<button class="${id===activeView?'active':''}" onclick="setView('${id}')">${l}</button>`).join("")+
-    `<span style="flex:1"></span><span style="color:var(--mut);font-size:12px">▶ auf einer Karte öffnet das passende Tool</span>`;
+    VIEWS.map(([id,l])=>`<button class="${id===activeView?'active':''}" onclick="setView('${id}')">${l}</button>`).join("");
 }
 function setView(v){activeView=v;renderNav();render();}
 function renderFilters(){
@@ -268,10 +256,8 @@ function renderBoard(){
   return html+`</div>`;
 }
 
-function toolBtn(k){return '<button class="toolbtn" data-tool="'+k+'" onclick="event.stopPropagation();launchTool(this.dataset.tool)">▶ '+TOOLS[k][1]+' '+TOOLS[k][0]+' öffnen</button>';}
 function cardHTML(c){
   const cat=CATS[c.cat]||["?","var(--line)"];
-  const toolKeys=(c.tools||[]).filter(function(k){return !!TOOLS[k];});
   return `<div class="card" draggable="true" style="border-left-color:${cat[1]}"
     ondragstart="onDragStart(event,'${c.id}')"
     ondragend="onDragEnd(event)"
@@ -283,7 +269,6 @@ function cardHTML(c){
     <div class="meta"><span class="tag" style="background:${hexa(cat[1])};color:${cat[1]}">${cat[0]}</span><span class="prio ${c.prio}">${c.prio}</span></div>
     ${c.note?`<div class="note">${esc(c.note)}</div>`:""}
     ${c.src?`<div class="src">${esc(c.src)}</div>`:""}
-    ${toolKeys.map(toolBtn).join("")}
   </div>`;
 }
 
@@ -349,36 +334,6 @@ function sortColByCat(col){
   save();render();
 }
 
-// ─── Sync ─────────────────────────────────────────────────
-function setSS(msg){document.getElementById('syncStatus').textContent=msg;}
-function checkSync(){
-  setSS('prüfe…');
-  fetch('/check_sync').then(r=>r.json()).then(d=>{
-    if(d.error){setSS('⚠️ offline');return;}
-    const s=[];if(d.ahead)s.push('⬆'+d.ahead);if(d.behind)s.push('⬇'+d.behind);
-    setSS(s.length?s.join(' '):'✅ aktuell');
-  }).catch(()=>setSS('⚠️ offline'));
-}
-function doPull(){
-  setSS('⬇ pull…');
-  fetch('/do_pull').then(r=>r.json()).then(d=>{
-    setSS(d.ok?'✅ pull OK':'⚠️ Fehler');
-    if(d.ok)initState();
-  }).catch(()=>setSS('⚠️ Fehler'));
-}
-function doPush(){
-  setSS('⬆ push…');
-  fetch('/do_push').then(r=>r.json()).then(d=>{
-    setSS(d.ok?'✅ push OK':'⚠️ '+(d.error||d.msg||'Fehler'));
-  }).catch(()=>setSS('⚠️ Fehler'));
-}
-
-// ─── Tool Launcher ────────────────────────────────────────
-function launchTool(tool){
-  if(location.protocol!=='http:'){toast('Bitte das Cockpit über die Dock-App starten.');return;}
-  toast((TOOLS[tool]?TOOLS[tool][0]:'Tool')+' wird gestartet…');
-  fetch('/launch?tool='+encodeURIComponent(tool)).then(r=>r.json()).then(d=>toast(d.msg||'gestartet')).catch(()=>toast('Fehler beim Start.'));
-}
 let toastT=null;
 function toast(msg){const el=document.getElementById("toast");el.textContent=msg;el.classList.add("show");clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove("show"),2600);}
 
@@ -392,14 +347,12 @@ function editCard(id,col){
   const catOpts=Object.keys(CATS).map(k=>`<option value="${k}" ${k===c.cat?'selected':''}>${CATS[k][0]}</option>`).join("");
   const colOpts=COLS.map(([k,l])=>`<option value="${k}" ${k===c.col?'selected':''}>${l}</option>`).join("");
   const prioOpts=PRIOS.map(p=>`<option ${p===c.prio?'selected':''}>${p}</option>`).join("");
-  const toolChecks=Object.keys(TOOLS).map(function(k){return '<label class="tool-check"><input type="checkbox" value="'+k+'" '+((c.tools||[]).includes(k)?'checked':'')+'>'+TOOLS[k][1]+' '+TOOLS[k][0]+'</label>';}).join("");
   document.getElementById("modal").innerHTML=`<h3>${id?"Karte bearbeiten":"Neue Karte"}</h3>
     <label>Titel</label><input id="m_t" value="${esc(c.t)}">
     <label>Notiz / Nächster Schritt</label><textarea id="m_note">${esc(c.note)}</textarea>
     <div class="frow"><div><label>Spalte</label><select id="m_col">${colOpts}</select></div>
     <div><label>Kategorie</label><select id="m_cat">${catOpts}</select></div>
     <div><label>Priorität</label><select id="m_prio">${prioOpts}</select></div></div>
-    <label>Tools (▶-Buttons)</label><div class="tool-checks" id="m_tools">${toolChecks}</div>
     <label>Quelle</label><input id="m_src" value="${esc(c.src||'')}">
     <div class="modal-actions">${id?`<button class="btn" style="margin-right:auto;color:var(--steuer)" onclick="delCard('${c.id}')">Löschen</button>`:""}
       <button class="btn" onclick="closeM()">Abbrechen</button>
@@ -408,8 +361,7 @@ function editCard(id,col){
 }
 function saveCard(cid,exists){
   const g=i=>document.getElementById(i).value;
-  const tools=Array.from(document.getElementById("m_tools").querySelectorAll('input:checked')).map(function(el){return el.value;});
-  const obj={id:cid,col:g("m_col"),cat:g("m_cat"),prio:g("m_prio"),t:g("m_t").trim()||"Unbenannt",note:g("m_note"),src:g("m_src"),tools:tools};
+  const obj={id:cid,col:g("m_col"),cat:g("m_cat"),prio:g("m_prio"),t:g("m_t").trim()||"Unbenannt",note:g("m_note"),src:g("m_src")};
   if(exists){const i=state.cards.findIndex(x=>x.id===cid);state.cards[i]=obj;}else state.cards.push(obj);
   save();closeM();render();
 }
@@ -468,6 +420,9 @@ try{
   document.getElementById('view').innerHTML='<div style="padding:20px;color:#ff7a7a;font-family:monospace;font-size:13px;white-space:pre-wrap">INIT-FEHLER: '+e.message+'\n'+e.stack+'</div>';
 }
 initState().then(()=>startPoll());
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('/service-worker.js').catch(()=>{}));
+}
 </script>
 </body>
 </html>

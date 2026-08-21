@@ -1,62 +1,90 @@
 #!/usr/bin/env python3
-"""Lokaler Launcher für Roberts Cockpit.
-Serviert cockpit.html, speichert/lädt cockpit_state.json und bietet Git-Sync-Routen.
-Nur Python-Bordmittel, keine Installation nötig. macOS."""
-import http.server, socketserver, subprocess, os, webbrowser, urllib.parse, json, socket
+"""Server für Roberts Cockpit.
+Serviert cockpit.html + PWA-Dateien, speichert/lädt cockpit_state.json.
+Nur Python-Bordmittel, keine Installation nötig.
 
-HERE  = os.path.dirname(os.path.abspath(__file__))
-HTML  = os.path.join(HERE, "cockpit.html")
+Lokal (macOS, Doppelklick-Flow): unverändert wie bisher, öffnet den Browser.
+Produktion (VPS, hinter Caddy/nginx): COCKPIT_ENV=production setzen, dann
+läuft der Server ohne Browser-Auto-Open, gebunden an 127.0.0.1.
+
+Env-Variablen:
+  COCKPIT_USER, COCKPIT_PASS   HTTP-Basic-Auth-Zugangsdaten. Wenn eine der
+                                beiden fehlt, läuft der Server ohne Login
+                                (nur für lokale Nutzung empfohlen).
+  COCKPIT_HOST                 Bind-Adresse, Default 127.0.0.1
+  COCKPIT_PORT                 Port, Default 8077
+  COCKPIT_ENV                  "production" unterdrückt den Browser-Auto-Open
+"""
+import base64
+import hmac
+import http.server
+import json
+import os
+import socket
+import socketserver
+import webbrowser
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "cockpit_state.json")
-PORT  = 8077
-URL   = "http://127.0.0.1:%d/" % PORT
 
-def run_tool(tool):
-    try:
-        if tool == "claude":
-            subprocess.Popen(["open", "-a", "Claude"])
-            return "Claude wird gestartet…"
-        if tool == "chatgpt":
-            subprocess.Popen(["open", "https://chatgpt.com"])
-            return "ChatGPT (Web) wird geöffnet…"
-        if tool == "claudecode":
-            cmd = 'cd ~/AI/"claude code"/generated-agents/mail-crm-agent 2>/dev/null || cd ~/AI; clear; claude'
-            osa = 'tell application "Terminal"\nactivate\ndo script "%s"\nend tell' % cmd
-            subprocess.Popen(["osascript", "-e", osa])
-            return "Claude Code im Terminal wird gestartet…"
-        if tool == "mailcrm":
-            app = os.path.expanduser("~/AI/claude code/generated-agents/mail-crm-agent/MailCRM.app")
-            if os.path.exists(app):
-                subprocess.Popen(["open", app])
-                return "MailCRM.app wird gestartet…"
-            subprocess.Popen(["open", "-a", "MailCRM"])
-            return "Versuche MailCRM zu starten…"
-        return "Unbekanntes Tool: %s" % tool
-    except Exception as e:
-        return "Fehler beim Start: %s" % e
+HOST = os.environ.get("COCKPIT_HOST", "127.0.0.1")
+PORT = int(os.environ.get("COCKPIT_PORT", "8077"))
+PRODUCTION = os.environ.get("COCKPIT_ENV") == "production"
+URL = "http://%s:%d/" % (HOST, PORT)
 
-def git(args, timeout=20):
-    return subprocess.run(["git", "-C", HERE] + args,
-                          capture_output=True, text=True, timeout=timeout)
+AUTH_USER = os.environ.get("COCKPIT_USER")
+AUTH_PASS = os.environ.get("COCKPIT_PASS")
+
+STATIC_FILES = {
+    "/": ("cockpit.html", "text/html; charset=utf-8"),
+    "/index.html": ("cockpit.html", "text/html; charset=utf-8"),
+    "/manifest.json": ("manifest.json", "application/manifest+json"),
+    "/service-worker.js": ("service-worker.js", "application/javascript"),
+    "/icons/icon-192.png": ("icons/icon-192.png", "image/png"),
+    "/icons/icon-512.png": ("icons/icon-512.png", "image/png"),
+}
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def _send(self, code, ctype, data):
+    def _send(self, code, ctype, data, extra_headers=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        for k, v in (extra_headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
 
     def _json(self, code, obj):
         self._send(code, "application/json", json.dumps(obj).encode())
 
-    # ── POST ────────────────────────────────────────────────
+    def _authorized(self):
+        if not AUTH_USER or not AUTH_PASS:
+            return True
+        header = self.headers.get("Authorization", "")
+        if not header.startswith("Basic "):
+            return False
+        try:
+            decoded = base64.b64decode(header[6:]).decode("utf-8")
+            user, _, pw = decoded.partition(":")
+        except Exception:
+            return False
+        return hmac.compare_digest(user, AUTH_USER) and hmac.compare_digest(pw, AUTH_PASS)
+
+    def _require_auth(self):
+        self._send(
+            401, "text/plain", b"Login erforderlich",
+            {"WWW-Authenticate": 'Basic realm="Roberts Cockpit"'},
+        )
+
     def do_POST(self):
-        u = urllib.parse.urlparse(self.path)
-        if u.path == "/state":
+        if not self._authorized():
+            self._require_auth()
+            return
+        if self.path == "/state":
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length)
             try:
@@ -68,77 +96,53 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             self._send(404, "text/plain", b"not found")
 
-    # ── GET ─────────────────────────────────────────────────
     def do_GET(self):
-        u = urllib.parse.urlparse(self.path)
-        p = u.path
+        if not self._authorized():
+            self._require_auth()
+            return
 
-        if p in ("/", "/index.html"):
+        if self.path in STATIC_FILES:
+            rel, ctype = STATIC_FILES[self.path]
             try:
-                with open(HTML, "rb") as f:
-                    self._send(200, "text/html; charset=utf-8", f.read())
+                with open(os.path.join(HERE, rel), "rb") as f:
+                    self._send(200, ctype, f.read())
             except Exception as e:
                 self._send(500, "text/plain; charset=utf-8", str(e).encode())
+            return
 
-        elif p == "/launch":
-            tool = urllib.parse.parse_qs(u.query).get("tool", [""])[0]
-            self._json(200, {"ok": True, "msg": run_tool(tool)})
-
-        elif p == "/state":
+        if self.path == "/state":
             try:
                 with open(STATE, "rb") as f:
                     self._send(200, "application/json", f.read())
             except FileNotFoundError:
                 self._send(404, "application/json", b"null")
+            return
 
-        elif p == "/check_sync":
-            try:
-                git(["fetch"], timeout=10)
-                ahead  = git(["rev-list", "--count", "origin/main..HEAD"]).stdout.strip()
-                behind = git(["rev-list", "--count", "HEAD..origin/main"]).stdout.strip()
-                self._json(200, {"ahead": int(ahead or 0), "behind": int(behind or 0)})
-            except Exception as e:
-                self._json(200, {"error": str(e)})
-
-        elif p == "/do_pull":
-            try:
-                r = git(["pull"], timeout=30)
-                self._json(200, {"ok": True, "msg": r.stdout.strip()})
-            except Exception as e:
-                self._json(200, {"ok": False, "error": str(e)})
-
-        elif p == "/do_push":
-            try:
-                git(["add", "cockpit_state.json"])
-                commit = git(["commit", "-m", "cockpit: sync state"])
-                if "nothing to commit" in (commit.stdout + commit.stderr):
-                    self._json(200, {"ok": True, "msg": "Keine Änderungen"})
-                    return
-                push = git(["push"], timeout=30)
-                ok = push.returncode == 0
-                self._json(200, {"ok": ok, "msg": "Push OK" if ok else push.stderr.strip()})
-            except Exception as e:
-                self._json(200, {"ok": False, "error": str(e)})
-
-        else:
-            self._send(404, "text/plain", b"not found")
+        self._send(404, "text/plain", b"not found")
 
 
 def port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("127.0.0.1", port)) == 0
+        return s.connect_ex((HOST, port)) == 0
+
+
+class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
 
 def main():
-    if port_in_use(PORT):
+    if not PRODUCTION and port_in_use(PORT):
         webbrowser.open(URL)
         return
-    socketserver.TCPServer.allow_reuse_address = True
-    httpd = socketserver.TCPServer(("127.0.0.1", PORT), Handler)
-    webbrowser.open(URL)
+    httpd = ThreadingServer((HOST, PORT), Handler)
+    if not PRODUCTION:
+        webbrowser.open(URL)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         httpd.shutdown()
+
 
 if __name__ == "__main__":
     main()

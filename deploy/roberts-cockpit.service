@@ -1,0 +1,20 @@
+[Unit]
+Description=Roberts Cockpit
+After=network.target
+
+[Service]
+Type=simple
+User=cockpit
+WorkingDirectory=/opt/roberts-cockpit
+Environment=COCKPIT_ENV=production
+Environment=COCKPIT_HOST=127.0.0.1
+Environment=COCKPIT_PORT=8077
+EnvironmentFile=/opt/roberts-cockpit/.env
+ExecStart=/usr/bin/python3 /opt/roberts-cockpit/server.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
