@@ -62,6 +62,11 @@
   .tag{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:20px}
   .card .note{font-size:12px;color:var(--mut)}
   .card .src{font-size:10.5px;color:var(--mut);margin-top:6px;font-style:italic}
+  .card .sub-t{font-size:10.5px;color:var(--mut);margin:-2px 0 6px}
+  .card .owner{font-size:10.5px;color:var(--mut)}
+  .card .note{white-space:pre-line}
+  .subfilters{display:flex;gap:6px;flex-wrap:wrap;width:100%;padding-top:4px}
+  .col.eingang h2{color:var(--txt)}
   .prio{font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:5px}
   .prio.Hoch{background:rgba(255,122,122,.18);color:var(--hoch)}
   .prio.Mittel{background:rgba(255,204,102,.18);color:var(--mittel)}
@@ -114,46 +119,46 @@
 <script>
 // ─── Constants ───────────────────────────────────────────
 const COLS=[
-  ["heute","🔴 Heute / Dringend"],["woche","🟢 Diese Woche"],["naechstes","🔵 Als Nächstes"],
+  ["eingang","📥 Eingang"],["heute","🔴 Heute / Dringend"],["woche","🟢 Diese Woche"],["naechstes","🔵 Als Nächstes"],
   ["spaeter","🟣 Später"],["geparkt","⚪ Geparkt (Vision)"],["erledigt","✅ Erledigt"],
 ];
-const CATS={steuer:["Steuer/KSK","var(--steuer)"],lehre:["Lehre & Inhalte","var(--lehre)"],crm:["CRM/Mail-Agent","var(--crm)"],arch:["Architektur/Cockpit","var(--arch)"],finanz:["Finanzen","var(--finanz)"],vision:["Vision","var(--vision)"]};
+const CATS={b1:["B1 Beruflich & Projekte","#6ea8fe"],b2:["B2 Recht & Verwaltung","#ff7a7a"],b3:["B3 Technik","#b69cff"],b4:["B4 Medizin","#ff9ecb"],b5:["B5 Pflege Mutter","#ffb36b"],b6:["B6 Privates","#7ee0a6"],b7:["B7 Sonstiges","#5cc8ff"],b8:["B8 Themen ohne Aufgabe","#c9c27a"],vision:["Vision","#8a93b5"]};
 const PRIOS=["Hoch","Mittel","Niedrig"];
 
 const SEED=[
-  {id:"c1",col:"heute",cat:"steuer",prio:"Hoch",t:"Steuererklärung / Kanzlei Jaklic",note:"Herrn Jaklic telefonisch erreichen; vorbereitete Unterlagen für die Finanzamts-Nachfrage an die Kanzlei senden.",src:"Import: Notizen für heute"},
-  {id:"c2",col:"heute",cat:"steuer",prio:"Hoch",t:"KSK informieren",note:"Minijob seit Dezember + befristete VHS-Anstellung seit Mitte Februar; Beitragsrückstände klären bzw. aussetzen.",src:"Import: Notizen für heute"},
-  {id:"c3",col:"woche",cat:"lehre",prio:"Hoch",t:"Tag 1 · S1 – 12 Aspekte extrahieren",note:"Gemeinsam aus den Kursdokumentationen die 12 Aspekte/Gebote ziehen → Raster Blatt 1.",src:"Perfekter Plan / Vorlagen_Tag1",tools:["claude"]},
-  {id:"c4",col:"woche",cat:"lehre",prio:"Hoch",t:"Tag 1 · S2 – Kursinhalte je Kurs erfassen",note:"Pro Kurs: Anbieter, Niveau, Teilnehmer, Themen, 3 Kernerkenntnisse.",src:"Perfekter Plan",tools:["claude"]},
-  {id:"c5",col:"woche",cat:"lehre",prio:"Mittel",t:"Tag 1 · S3 – Inhalte taggen",note:"Jede Kernerkenntnis einem Aspekt (1–12) + Niveau zuordnen.",src:"Perfekter Plan",tools:["claude"]},
-  {id:"c6",col:"woche",cat:"lehre",prio:"Mittel",t:"Tag 1 · S4 – 12 WhatsApp-Mikro-Inhalte",note:"Je Aspekt 1 Post, gestaffelt 4 advanced / 4 intermediate / 4 beginner.",src:"Perfekter Plan",tools:["claude"]},
-  {id:"c7",col:"woche",cat:"lehre",prio:"Mittel",t:"Tag 1 · S5 – Selbsteinschätzung v0",note:"Je Aspekt eine Frage mit drei Niveaubändern.",src:"Perfekter Plan",tools:["claude"]},
-  {id:"c8",col:"woche",cat:"lehre",prio:"Mittel",t:"Woche · A – Selbsteinschätzungs-Landingpages v1",note:"Zwei Varianten (AVHS + Privat) mit Auto-Scoring → Niveau + Kursempfehlung.",src:"Perfekter Plan",tools:["claude"]},
-  {id:"c9",col:"woche",cat:"lehre",prio:"Mittel",t:"Woche · B – Workshop + Ergänzungsformat",note:"Workshop konzipieren (Zielniveau, Schwerpunkt-Aspekte, Pilottermin) + Ergänzungsformat skizzieren.",src:"Perfekter Plan",tools:["claude"]},
-  {id:"c10",col:"woche",cat:"lehre",prio:"Mittel",t:"Woche · C – WhatsApp-Rhythmus aufsetzen",note:"Redaktionsplan ~4 Wochen + wöchentlicher Entwurfs-Task (3 Posts/Woche).",src:"Perfekter Plan",tools:["claude"]},
-  {id:"c11",col:"naechstes",cat:"arch",prio:"Hoch",t:"⭐ Großes Unternehmens-Dashboard bauen",note:"NÄCHSTER SCHRITT: Executive Dashboard, Portfolio+Priorisierung, Scoring, Finanz-/Liquiditätsübersicht, Wissensportfolio, Ideen-Backlog, Roadmap, KPI, Entscheidungsjournal, Reviews.",src:"dieser Chat",tools:["claude"]},
-  {id:"c12",col:"naechstes",cat:"crm",prio:"Hoch",t:"Mail-CRM: erster echter Lauf auf dem Mac",note:"fetch_mail (Microsoft-Login) → Triage → process → Dashboard. Zeitraum 2024-01-01 – 2026-05-31.",src:"Import: Custom agent system prompt",tools:["mailcrm"]},
-  {id:"c13",col:"naechstes",cat:"crm",prio:"Mittel",t:"Mail-CRM: Outlook-Connector prüfen",note:"Könnte den Device-Login/fetch_mail.py ersetzen.",src:"Import: Custom agent system prompt"},
-  {id:"c14",col:"naechstes",cat:"arch",prio:"Mittel",t:"Knowledge Model am CRM validieren → v0.2",note:"7 Kern-Objekte gegen echte CRM-Felder testen, dann Version 0.2.",src:"Robert_Knowledge_Model_Phase0",tools:["claude"]},
-  {id:"c15",col:"naechstes",cat:"arch",prio:"Mittel",t:"EU-Backend: Anbieter-Endwahl",note:"Hetzner (99) vs. IONOS (85). Danach AVV abschließen.",src:"Backend-Auswahl-Entscheidungsmatrix"},
-  {id:"c16",col:"naechstes",cat:"arch",prio:"Mittel",t:"Backend-Software wählen",note:"PocketBase vs. selbst-gehostetes Supabase.",src:"Backend-Auswahl-Entscheidungsmatrix"},
-  {id:"c17",col:"naechstes",cat:"finanz",prio:"Mittel",t:"Finanzen & Buchhaltung mit KI",note:"Empfehlungsdokument: Prio 1; hier als paralleler Hygiene-Track.",src:"Empfehlung Vorgehensweise"},
-  {id:"c18",col:"spaeter",cat:"arch",prio:"Mittel",t:"Cockpit als synchronisierte PWA",note:"Multi-Device, Live-Sync über EU-Backend, Sprachsteuerung. Nach Backend-Wahl.",src:"Cockpit-Bau-Entscheidung"},
-  {id:"c19",col:"spaeter",cat:"lehre",prio:"Mittel",t:"Assessment-System ausbauen",note:"Aus Selbsteinschätzung → vollwertiges Assessment (Prio 7).",src:"Prioritäten 1–10"},
-  {id:"c20",col:"spaeter",cat:"lehre",prio:"Niedrig",t:"Wissensverwertung als Projekt-/KI-Manager",note:"Zweite Wissensdomäne neben Musik.",src:"Empfehlung Vorgehensweise"},
-  {id:"c21",col:"spaeter",cat:"arch",prio:"Niedrig",t:"Entscheiden: Cockpit & CRM gleiches Backend?",note:"Beeinflusst, ob ein EU-Backend für beides.",src:"Cockpit-Bau-Entscheidung"},
-  {id:"c22",col:"geparkt",cat:"vision",prio:"Niedrig",t:"Großes RAG-System",note:"Erst wenn bewertetes Wissen mit Quellen existiert (Phase 3).",src:"Strategiedokument"},
-  {id:"c23",col:"geparkt",cat:"vision",prio:"Niedrig",t:"Künstlerplattform (Vollausbau)",note:"Wissensportal Steuer/KSK/Recht für Künstler & Musiker.",src:"Strategiedokument"},
-  {id:"c24",col:"geparkt",cat:"vision",prio:"Niedrig",t:"YouTube-/Video-Agent (Pilot „Brazil“)",note:"Semantische Szenensuche, skalierbarer Filmindex.",src:"Strategiedokument"},
-  {id:"c25",col:"geparkt",cat:"vision",prio:"Niedrig",t:"Schülerplattform (Vollausbau)",note:"Inkl. Transpositions-Agent (Leadsheet/Tabulatur).",src:"Strategiedokument"},
-  {id:"c26",col:"geparkt",cat:"vision",prio:"Niedrig",t:"Fördermittel-Agent (Vollausbau)",note:"EU-/Bundes-/Landes-/Stiftungs-/Crowdfunding-Recherche.",src:"Strategiedokument"},
-  {id:"c27",col:"geparkt",cat:"vision",prio:"Niedrig",t:"Künstler-Hub · Podcast · YouTube-Kanal",note:"Reichweite & Community – nach Validierung der Kernplattform.",src:"Strategiedokument"},
-  {id:"c28",col:"erledigt",cat:"crm",prio:"Hoch",t:"Mail-CRM-Agent gebaut & validiert (Tier 3)",note:"Anti-Halluzination (Verbatim-Check), 3 Skills, Eval-Gates grün.",src:"Custom agent system prompt",tools:["claudecode"]},
-  {id:"c29",col:"erledigt",cat:"crm",prio:"Mittel",t:"MailCRM.app (Ein-Klick fürs Dock)",note:"Run-Button, Auto-Triage-Modus, Preflight-Check.",src:"Custom agent system prompt",tools:["mailcrm"]},
-  {id:"c30",col:"erledigt",cat:"arch",prio:"Mittel",t:"Knowledge Model Phase 0 (v0.1)",note:"7 Kern-Objekte, Attribute, Beziehungen, Zustände, Navigator-Check.",src:"Robert_Knowledge_Model_Phase0.xlsx"},
-  {id:"c31",col:"erledigt",cat:"arch",prio:"Mittel",t:"EU-Backend-Entscheidungsmatrix",note:"Kriterien + 5 Anbieter + Matrix → Empfehlung Hetzner/IONOS.",src:"Backend-Auswahl-Entscheidungsmatrix"},
-  {id:"c32",col:"erledigt",cat:"lehre",prio:"Mittel",t:"Tag-1-Vorlagen (Excel) + Kursinfo",note:"6 Vorlagen-Blätter; Seite „Gitarre und Gesang“ gespeichert.",src:"Vorlagen_Tag1 / Kursinfo"},
-  {id:"c33",col:"erledigt",cat:"arch",prio:"Mittel",t:"4 Claude-Chats importiert",note:"ChatGPT organization cockpit, Custom agent system prompt, Outlook email agent + Material.",src:"dieser Chat"},
+  {id:"c1",col:"heute",cat:"b2",sub:"",prio:"Hoch",t:"Steuererklärung / Kanzlei Jaklic",note:"Herrn Jaklic telefonisch erreichen; vorbereitete Unterlagen für die Finanzamts-Nachfrage an die Kanzlei senden.",src:"Import: Notizen für heute"},
+  {id:"c2",col:"heute",cat:"b1",sub:"B1.2 Arbeitsagentur und Künstlersozialkasse",prio:"Hoch",t:"KSK informieren",note:"Minijob seit Dezember + befristete VHS-Anstellung seit Mitte Februar; Beitragsrückstände klären bzw. aussetzen.",src:"Import: Notizen für heute"},
+  {id:"c3",col:"woche",cat:"b1",sub:"B1.4 Musik Lehre",prio:"Hoch",t:"Tag 1 · S1 – 12 Aspekte extrahieren",note:"Gemeinsam aus den Kursdokumentationen die 12 Aspekte/Gebote ziehen → Raster Blatt 1.",src:"Perfekter Plan / Vorlagen_Tag1",tools:["claude"]},
+  {id:"c4",col:"woche",cat:"b1",sub:"B1.4 Musik Lehre",prio:"Hoch",t:"Tag 1 · S2 – Kursinhalte je Kurs erfassen",note:"Pro Kurs: Anbieter, Niveau, Teilnehmer, Themen, 3 Kernerkenntnisse.",src:"Perfekter Plan",tools:["claude"]},
+  {id:"c5",col:"woche",cat:"b1",sub:"B1.4 Musik Lehre",prio:"Mittel",t:"Tag 1 · S3 – Inhalte taggen",note:"Jede Kernerkenntnis einem Aspekt (1–12) + Niveau zuordnen.",src:"Perfekter Plan",tools:["claude"]},
+  {id:"c6",col:"woche",cat:"b1",sub:"B1.4 Musik Lehre",prio:"Mittel",t:"Tag 1 · S4 – 12 WhatsApp-Mikro-Inhalte",note:"Je Aspekt 1 Post, gestaffelt 4 advanced / 4 intermediate / 4 beginner.",src:"Perfekter Plan",tools:["claude"]},
+  {id:"c7",col:"woche",cat:"b1",sub:"B1.4 Musik Lehre",prio:"Mittel",t:"Tag 1 · S5 – Selbsteinschätzung v0",note:"Je Aspekt eine Frage mit drei Niveaubändern.",src:"Perfekter Plan",tools:["claude"]},
+  {id:"c8",col:"woche",cat:"b1",sub:"B1.4 Musik Lehre",prio:"Mittel",t:"Woche · A – Selbsteinschätzungs-Landingpages v1",note:"Zwei Varianten (AVHS + Privat) mit Auto-Scoring → Niveau + Kursempfehlung.",src:"Perfekter Plan",tools:["claude"]},
+  {id:"c9",col:"woche",cat:"b1",sub:"B1.4 Musik Lehre",prio:"Mittel",t:"Woche · B – Workshop + Ergänzungsformat",note:"Workshop konzipieren (Zielniveau, Schwerpunkt-Aspekte, Pilottermin) + Ergänzungsformat skizzieren.",src:"Perfekter Plan",tools:["claude"]},
+  {id:"c10",col:"woche",cat:"b1",sub:"B1.4 Musik Lehre",prio:"Mittel",t:"Woche · C – WhatsApp-Rhythmus aufsetzen",note:"Redaktionsplan ~4 Wochen + wöchentlicher Entwurfs-Task (3 Posts/Woche).",src:"Perfekter Plan",tools:["claude"]},
+  {id:"c11",col:"naechstes",cat:"b1",sub:"B1.9 Cockpit",prio:"Hoch",t:"⭐ Großes Unternehmens-Dashboard bauen",note:"NÄCHSTER SCHRITT: Executive Dashboard, Portfolio+Priorisierung, Scoring, Finanz-/Liquiditätsübersicht, Wissensportfolio, Ideen-Backlog, Roadmap, KPI, Entscheidungsjournal, Reviews.",src:"dieser Chat",tools:["claude"]},
+  {id:"c12",col:"naechstes",cat:"b1",sub:"B1.10 Buchhaltung, Mail-CRM, Lernplattform",prio:"Hoch",t:"Mail-CRM: erster echter Lauf auf dem Mac",note:"fetch_mail (Microsoft-Login) → Triage → process → Dashboard. Zeitraum 2024-01-01 – 2026-05-31.",src:"Import: Custom agent system prompt",tools:["mailcrm"]},
+  {id:"c13",col:"naechstes",cat:"b1",sub:"B1.10 Buchhaltung, Mail-CRM, Lernplattform",prio:"Mittel",t:"Mail-CRM: Outlook-Connector prüfen",note:"Könnte den Device-Login/fetch_mail.py ersetzen.",src:"Import: Custom agent system prompt"},
+  {id:"c14",col:"naechstes",cat:"b1",sub:"B1.9 Cockpit",prio:"Mittel",t:"Knowledge Model am CRM validieren → v0.2",note:"7 Kern-Objekte gegen echte CRM-Felder testen, dann Version 0.2.",src:"Robert_Knowledge_Model_Phase0",tools:["claude"]},
+  {id:"c15",col:"naechstes",cat:"b1",sub:"B1.9 Cockpit",prio:"Mittel",t:"EU-Backend: Anbieter-Endwahl",note:"Hetzner (99) vs. IONOS (85). Danach AVV abschließen.",src:"Backend-Auswahl-Entscheidungsmatrix"},
+  {id:"c16",col:"naechstes",cat:"b1",sub:"B1.9 Cockpit",prio:"Mittel",t:"Backend-Software wählen",note:"PocketBase vs. selbst-gehostetes Supabase.",src:"Backend-Auswahl-Entscheidungsmatrix"},
+  {id:"c17",col:"naechstes",cat:"b1",sub:"B1.10 Buchhaltung, Mail-CRM, Lernplattform",prio:"Mittel",t:"Finanzen & Buchhaltung mit KI",note:"Empfehlungsdokument: Prio 1; hier als paralleler Hygiene-Track.",src:"Empfehlung Vorgehensweise"},
+  {id:"c18",col:"spaeter",cat:"b1",sub:"B1.9 Cockpit",prio:"Mittel",t:"Cockpit als synchronisierte PWA",note:"Multi-Device, Live-Sync über EU-Backend, Sprachsteuerung. Nach Backend-Wahl.",src:"Cockpit-Bau-Entscheidung"},
+  {id:"c19",col:"spaeter",cat:"b1",sub:"B1.4 Musik Lehre",prio:"Mittel",t:"Assessment-System ausbauen",note:"Aus Selbsteinschätzung → vollwertiges Assessment (Prio 7).",src:"Prioritäten 1–10"},
+  {id:"c20",col:"spaeter",cat:"b1",sub:"B1.12 Sonstiges beruflich",prio:"Niedrig",t:"Wissensverwertung als Projekt-/KI-Manager",note:"Zweite Wissensdomäne neben Musik.",src:"Empfehlung Vorgehensweise"},
+  {id:"c21",col:"spaeter",cat:"b1",sub:"B1.9 Cockpit",prio:"Niedrig",t:"Entscheiden: Cockpit & CRM gleiches Backend?",note:"Beeinflusst, ob ein EU-Backend für beides.",src:"Cockpit-Bau-Entscheidung"},
+  {id:"c22",col:"geparkt",cat:"vision",sub:"",prio:"Niedrig",t:"Großes RAG-System",note:"Erst wenn bewertetes Wissen mit Quellen existiert (Phase 3).",src:"Strategiedokument"},
+  {id:"c23",col:"geparkt",cat:"vision",sub:"",prio:"Niedrig",t:"Künstlerplattform (Vollausbau)",note:"Wissensportal Steuer/KSK/Recht für Künstler & Musiker.",src:"Strategiedokument"},
+  {id:"c24",col:"geparkt",cat:"vision",sub:"",prio:"Niedrig",t:"YouTube-/Video-Agent (Pilot „Brazil“)",note:"Semantische Szenensuche, skalierbarer Filmindex.",src:"Strategiedokument"},
+  {id:"c25",col:"geparkt",cat:"vision",sub:"",prio:"Niedrig",t:"Schülerplattform (Vollausbau)",note:"Inkl. Transpositions-Agent (Leadsheet/Tabulatur).",src:"Strategiedokument"},
+  {id:"c26",col:"geparkt",cat:"vision",sub:"",prio:"Niedrig",t:"Fördermittel-Agent (Vollausbau)",note:"EU-/Bundes-/Landes-/Stiftungs-/Crowdfunding-Recherche.",src:"Strategiedokument"},
+  {id:"c27",col:"geparkt",cat:"vision",sub:"",prio:"Niedrig",t:"Künstler-Hub · Podcast · YouTube-Kanal",note:"Reichweite & Community – nach Validierung der Kernplattform.",src:"Strategiedokument"},
+  {id:"c28",col:"erledigt",cat:"b1",sub:"B1.10 Buchhaltung, Mail-CRM, Lernplattform",prio:"Hoch",t:"Mail-CRM-Agent gebaut & validiert (Tier 3)",note:"Anti-Halluzination (Verbatim-Check), 3 Skills, Eval-Gates grün.",src:"Custom agent system prompt",tools:["claudecode"]},
+  {id:"c29",col:"erledigt",cat:"b1",sub:"B1.10 Buchhaltung, Mail-CRM, Lernplattform",prio:"Mittel",t:"MailCRM.app (Ein-Klick fürs Dock)",note:"Run-Button, Auto-Triage-Modus, Preflight-Check.",src:"Custom agent system prompt",tools:["mailcrm"]},
+  {id:"c30",col:"erledigt",cat:"b1",sub:"B1.9 Cockpit",prio:"Mittel",t:"Knowledge Model Phase 0 (v0.1)",note:"7 Kern-Objekte, Attribute, Beziehungen, Zustände, Navigator-Check.",src:"Robert_Knowledge_Model_Phase0.xlsx"},
+  {id:"c31",col:"erledigt",cat:"b1",sub:"B1.9 Cockpit",prio:"Mittel",t:"EU-Backend-Entscheidungsmatrix",note:"Kriterien + 5 Anbieter + Matrix → Empfehlung Hetzner/IONOS.",src:"Backend-Auswahl-Entscheidungsmatrix"},
+  {id:"c32",col:"erledigt",cat:"b1",sub:"B1.4 Musik Lehre",prio:"Mittel",t:"Tag-1-Vorlagen (Excel) + Kursinfo",note:"6 Vorlagen-Blätter; Seite „Gitarre und Gesang“ gespeichert.",src:"Vorlagen_Tag1 / Kursinfo"},
+  {id:"c33",col:"erledigt",cat:"b1",sub:"B1.9 Cockpit",prio:"Mittel",t:"4 Claude-Chats importiert",note:"ChatGPT organization cockpit, Custom agent system prompt, Outlook email agent + Material.",src:"dieser Chat"},
 ];
 
 // ─── State ───────────────────────────────────────────────
@@ -204,7 +209,7 @@ function startPoll(){
 }
 
 // ─── Nav & Filters ───────────────────────────────────────
-let activeView="board",filterCat="alle",searchQ="";
+let activeView="board",filterCat="alle",filterSub="alle",searchQ="";
 
 const VIEWS=[["board","🗂 Kanban"],["ctx","📋 Kontext & Anforderungen"]];
 function renderNav(){
@@ -218,10 +223,19 @@ function renderFilters(){
   f.style.display="flex";
   let html=`<span class="chip ${filterCat==='alle'?'active':''}" onclick="setFilter('alle')">Alle</span>`;
   for(const k in CATS) html+=`<span class="chip ${filterCat===k?'active':''}" onclick="setFilter('${k}')"><span class="d" style="background:${CATS[k][1]}"></span>${CATS[k][0]}</span>`;
-  html+=`<input id="search" placeholder="🔍 suchen…" value="${searchQ}" oninput="searchQ=this.value;render()">`;
+  html+=`<input id="search" placeholder="🔍 suchen…" value="${esc(searchQ)}" oninput="searchQ=this.value;render()">`;
+  const subs=[...new Set(state.cards.filter(c=>c.cat===filterCat&&c.sub).map(c=>c.sub))].sort((a,b)=>a.localeCompare(b,"de",{numeric:true}));
+  if(subs.length){
+    html+=`<div class="subfilters"><span class="chip ${filterSub==='alle'?'active':''}" onclick="setSub('alle')">Alle Unterthemen</span>`;
+    subs.forEach((s,i)=>html+=`<span class="chip ${filterSub===s?'active':''}" onclick="setSub(${i})">${esc(s)}</span>`);
+    html+=`</div>`;
+  }
+  _subs=subs;
   f.innerHTML=html;
 }
-function setFilter(c){filterCat=c;render();}
+let _subs=[];
+function setFilter(c){filterCat=c;filterSub="alle";render();}
+function setSub(i){filterSub=i==="alle"?"alle":_subs[i];render();}
 function render(){
   renderFilters();
   document.getElementById("view").innerHTML=activeView==="board"?renderBoard():renderCtx();
@@ -229,13 +243,14 @@ function render(){
 }
 function visible(c){
   if(filterCat!=="alle"&&c.cat!==filterCat)return false;
-  if(searchQ){const q=searchQ.toLowerCase();return(c.t+" "+(c.note||"")+" "+(c.src||"")).toLowerCase().includes(q);}
+  if(filterSub!=="alle"&&c.sub!==filterSub)return false;
+  if(searchQ){const q=searchQ.toLowerCase();return(c.t+" "+(c.note||"")+" "+(c.src||"")+" "+(c.sub||"")+" "+(c.owner||"")).toLowerCase().includes(q);}
   return true;
 }
 
 // ─── Board ───────────────────────────────────────────────
 function renderBoard(){
-  let html=`<div class="banner">Karten nach deinen Priorisierungen. Karten mit Tool-Bezug haben einen <b>▶-Button</b>. <b>⇅ Prio / ⇅ Kat</b> sortiert die Spalte. Karten per Drag&Drop zwischen und <em>innerhalb</em> von Spalten verschieben.</div><div class="board">`;
+  let html=`<div class="banner">Neue Aufgaben landen im <b>📥 Eingang</b> – von dort per Drag&Drop einsortieren. Bereich wählen, dann nach <b>Unterthema</b> filtern. Karten mit Tool-Bezug haben einen <b>▶-Button</b>. <b>⇅ Prio / ⇅ Kat</b> sortiert die Spalte. Karten per Drag&Drop zwischen und <em>innerhalb</em> von Spalten verschieben.</div><div class="board">`;
   for(const [id,label] of COLS){
     const cards=state.cards.filter(c=>c.col===id&&visible(c));
     html+=`<div class="col ${id}"
@@ -266,15 +281,16 @@ function cardHTML(c){
     ondrop="onDropCard(event,'${c.id}')"
     onclick="editCard('${c.id}')">
     <div class="t">${esc(c.t)}</div>
-    <div class="meta"><span class="tag" style="background:${hexa(cat[1])};color:${cat[1]}">${cat[0]}</span><span class="prio ${c.prio}">${c.prio}</span></div>
+    <div class="meta"><span class="tag" style="background:${hexa(cat[1])};color:${cat[1]}">${cat[0]}</span><span class="prio ${c.prio}">${c.prio}</span>${c.owner&&c.owner!=="Robert"?`<span class="owner">👤 ${esc(c.owner)}</span>`:""}</div>
+    ${c.sub?`<div class="sub-t">${esc(c.sub)}</div>`:""}
     ${c.note?`<div class="note">${esc(c.note)}</div>`:""}
     ${c.src?`<div class="src">${esc(c.src)}</div>`:""}
   </div>`;
 }
 
 function hexa(v){
-  const m={"var(--steuer)":"rgba(255,122,122,.16)","var(--lehre)":"rgba(126,224,166,.16)","var(--crm)":"rgba(92,200,255,.16)","var(--arch)":"rgba(182,156,255,.16)","var(--finanz)":"rgba(255,204,102,.16)","var(--vision)":"rgba(138,147,181,.16)"};
-  return m[v]||"var(--panel)";
+  const m=/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(v);
+  return m?`rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},.16)`:"var(--panel)";
 }
 
 // ─── Drag & Drop ─────────────────────────────────────────
@@ -329,7 +345,8 @@ function sortColByPrio(col){
   save();render();
 }
 function sortColByCat(col){
-  const sorted=state.cards.filter(c=>c.col===col).sort((a,b)=>(a.cat||'').localeCompare(b.cat||''));
+  const key=c=>(c.cat||'')+" "+(c.sub||'')+" "+c.t;
+  const sorted=state.cards.filter(c=>c.col===col).sort((a,b)=>key(a).localeCompare(key(b),"de",{numeric:true}));
   state.cards=[...state.cards.filter(c=>c.col!==col),...sorted];
   save();render();
 }
@@ -343,7 +360,8 @@ M.addEventListener("click",e=>{if(e.target===M)closeM();});
 function closeM(){M.classList.remove("open");document.getElementById("modal").innerHTML="";}
 function uid(){return "c"+Math.random().toString(36).slice(2,8);}
 function editCard(id,col){
-  const c=id?state.cards.find(x=>x.id===id):{id:uid(),col:col||"naechstes",cat:"lehre",prio:"Mittel",t:"",note:"",src:"",tools:[]};
+  const c=id?state.cards.find(x=>x.id===id):{id:uid(),col:col||"eingang",cat:filterCat in CATS?filterCat:"b1",sub:filterSub!=="alle"?filterSub:"",owner:"Robert",prio:"Mittel",t:"",note:"",src:"",tools:[]};
+  const subOpts=[...new Set(state.cards.filter(x=>x.sub).map(x=>x.sub))].sort().map(s=>`<option value="${esc(s)}">`).join("");
   const catOpts=Object.keys(CATS).map(k=>`<option value="${k}" ${k===c.cat?'selected':''}>${CATS[k][0]}</option>`).join("");
   const colOpts=COLS.map(([k,l])=>`<option value="${k}" ${k===c.col?'selected':''}>${l}</option>`).join("");
   const prioOpts=PRIOS.map(p=>`<option ${p===c.prio?'selected':''}>${p}</option>`).join("");
@@ -353,6 +371,8 @@ function editCard(id,col){
     <div class="frow"><div><label>Spalte</label><select id="m_col">${colOpts}</select></div>
     <div><label>Kategorie</label><select id="m_cat">${catOpts}</select></div>
     <div><label>Priorität</label><select id="m_prio">${prioOpts}</select></div></div>
+    <div class="grid2"><div><label>Unterthema</label><input id="m_sub" list="m_subs" value="${esc(c.sub||'')}"><datalist id="m_subs">${subOpts}</datalist></div>
+    <div><label>Zuständig</label><input id="m_owner" value="${esc(c.owner||'')}"></div></div>
     <label>Quelle</label><input id="m_src" value="${esc(c.src||'')}">
     <div class="modal-actions">${id?`<button class="btn" style="margin-right:auto;color:var(--steuer)" onclick="delCard('${c.id}')">Löschen</button>`:""}
       <button class="btn" onclick="closeM()">Abbrechen</button>
@@ -361,8 +381,8 @@ function editCard(id,col){
 }
 function saveCard(cid,exists){
   const g=i=>document.getElementById(i).value;
-  const obj={id:cid,col:g("m_col"),cat:g("m_cat"),prio:g("m_prio"),t:g("m_t").trim()||"Unbenannt",note:g("m_note"),src:g("m_src")};
-  if(exists){const i=state.cards.findIndex(x=>x.id===cid);state.cards[i]=obj;}else state.cards.push(obj);
+  const obj={id:cid,col:g("m_col"),cat:g("m_cat"),sub:g("m_sub").trim(),owner:g("m_owner").trim(),prio:g("m_prio"),t:g("m_t").trim()||"Unbenannt",note:g("m_note"),src:g("m_src")};
+  if(exists){const i=state.cards.findIndex(x=>x.id===cid);state.cards[i]={...state.cards[i],...obj};}else state.cards.push({tools:[],...obj});
   save();closeM();render();
 }
 function delCard(id){if(!confirm("Karte löschen?"))return;state.cards=state.cards.filter(x=>x.id!==id);save();closeM();render();}
