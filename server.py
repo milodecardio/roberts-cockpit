@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Server für Roberts Cockpit.
-Serviert cockpit.html + PWA-Dateien, speichert/lädt cockpit_state.json.
+Serviert cockpit.html + PWA-Dateien, speichert/lädt die Karten in cockpit.db (SQLite).
 Nur Python-Bordmittel, keine Installation nötig.
 
 Lokal (macOS, Doppelklick-Flow): unverändert wie bisher, öffnet den Browser.
@@ -24,8 +24,12 @@ import socket
 import socketserver
 import webbrowser
 
+import db
+
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Übergangsweise weiter mitgeschrieben (Rückweg + lesbares Backup).
 STATE = os.path.join(HERE, "cockpit_state.json")
+DB_PATH = os.environ.get("COCKPIT_DB", os.path.join(HERE, "cockpit.db"))
 
 HOST = os.environ.get("COCKPIT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("COCKPIT_PORT", "8077"))
@@ -98,11 +102,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length)
             try:
-                with open(STATE, "wb") as f:
-                    f.write(body)
-                self._json(200, {"ok": True})
+                state = json.loads(body)
+                db.save_state(DB_PATH, state)
+            except db.EmptySaveRefused:
+                self._json(409, {"error": "Leerer Stand abgelehnt (würde alle Karten löschen)"})
+                return
+            except ValueError as e:
+                self._json(400, {"error": str(e)})
+                return
             except Exception as e:
                 self._json(500, {"error": str(e)})
+                return
+            try:
+                write_json_mirror()
+            except Exception:
+                pass  # Spiegel ist nur Komfort, Datenbank ist maßgeblich
+            self._json(200, {"ok": True})
         else:
             self._send(404, "text/plain", b"not found")
 
@@ -122,13 +137,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if self.path == "/state":
             try:
-                with open(STATE, "rb") as f:
-                    self._send(200, "application/json", f.read())
-            except FileNotFoundError:
-                self._send(404, "application/json", b"null")
+                if not db.has_any_cards(DB_PATH):
+                    self._send(404, "application/json", b"null")
+                    return
+                data = json.dumps(db.load_state(DB_PATH), ensure_ascii=False).encode("utf-8")
+                self._send(200, "application/json", data)
+            except Exception as e:
+                self._json(500, {"error": str(e)})
             return
 
         self._send(404, "text/plain", b"not found")
+
+
+def write_json_mirror():
+    """Schreibt den aktuellen Stand zusätzlich als JSON (atomar)."""
+    tmp = STATE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(db.load_state(DB_PATH), f, ensure_ascii=False)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, STATE)
 
 
 def port_in_use(port):
@@ -145,6 +172,9 @@ def main():
     if not PRODUCTION and port_in_use(PORT):
         webbrowser.open(URL)
         return
+    imported = db.init(DB_PATH, legacy_json=STATE)
+    if imported:
+        print("Datenbank angelegt, %d Karten aus %s übernommen." % (imported, STATE), flush=True)
     httpd = ThreadingServer((HOST, PORT), Handler)
     if not PRODUCTION:
         webbrowser.open(URL)

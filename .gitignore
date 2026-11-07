@@ -4,3 +4,6 @@ __pycache__/
 .DS_Store
 .env
 cockpit_backup*.json
+cockpit.db
+cockpit.db-*
+*.tmp
