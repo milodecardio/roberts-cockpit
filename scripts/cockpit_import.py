@@ -14,6 +14,8 @@ Benutzen:
     python3 scripts/cockpit_import.py --los           wirklich übertragen
     python3 scripts/cockpit_import.py --los --max 50  höchstens 50 Dateien (zum Testen)
     python3 scripts/cockpit_import.py --quelle onedrive-getintune --los
+    python3 scripts/cockpit_import.py --quelle mac-schreibtisch --ordner "004 Bewerbungen" --los
+      → nur einen Unterordner der Quelle übertragen (Pfad relativ zum Quellordner)
 """
 import argparse
 import base64
@@ -35,7 +37,7 @@ SF_DATALESS = 0x40000000  # macOS: Datei liegt nur in der Cloud (OneDrive „bei
 
 GROUPS = {
     "dokumente": [".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".md", ".pages"],
-    "tabellen": [".xls", ".xlsx", ".csv", ".ods", ".numbers"],
+    "tabellen": [".xls", ".xlsx", ".xlsm", ".csv", ".ods", ".numbers"],
     "praesentationen": [".ppt", ".pptx", ".key", ".odp"],
     "bilder": [".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".webp"],
     "noten": [".mscz", ".musicxml", ".mxl", ".sib", ".gp", ".gpx", ".gp5", ".mid", ".midi"],
@@ -153,12 +155,13 @@ class Api:
 
 # ─── Dateien finden ───────────────────────────────────────────────────
 
-def scan(src, exts, exclude, max_bytes):
+def scan(src, exts, exclude, max_bytes, sub=None):
     root = os.path.expanduser(src["pfad"])
-    if not os.path.isdir(root):
-        log("⚠️ Ordner fehlt: %s" % root)
+    start = os.path.join(root, sub) if sub else root
+    if not os.path.isdir(start):
+        log("⚠️ Ordner fehlt: %s" % start)
         return
-    for dp, dns, fns in os.walk(root):
+    for dp, dns, fns in os.walk(start):
         dns[:] = sorted(d for d in dns if not d.startswith(".") and d not in exclude
                         and not d.endswith((".app", ".photoslibrary", ".musiclibrary", ".fcpbundle")))
         for fn in sorted(fns):
@@ -190,7 +193,10 @@ def main():
     ap.add_argument("--quelle", help="nur diese Quelle (name aus der Konfiguration)")
     ap.add_argument("--nur-lokal", action="store_true",
                     help="OneDrive-Dateien, die nur in der Cloud liegen, überspringen (kein Download)")
+    ap.add_argument("--ordner", help="nur diesen Unterordner der Quelle (relativ zum Quellordner)")
     a = ap.parse_args()
+    if a.ordner and not a.quelle:
+        sys.exit("--ordner braucht --quelle")
     if a.setup:
         return setup()
 
@@ -210,7 +216,7 @@ def main():
         known = api.get("/api/import/known?source=" + urllib.parse.quote(src["name"]))
         new = changed = same = big = cloud = errors = 0
         new_b = 0
-        for f in scan(src, exts, exclude, max_bytes):
+        for f in scan(src, exts, exclude, max_bytes, a.ordner):
             k = known.get(f["ref"])
             if k and abs((k[0] or 0) - f["mtime"]) < 2 and k[1] == f["size"]:
                 same += 1
@@ -242,8 +248,8 @@ def main():
                         log("  ⚠️ %s: %s" % (f["ref"], e))
                     else:
                         time.sleep(5 * (attempt + 1))
-        log("%s: %d neu, %d geändert (%s) · %d unverändert · %d zu groß (> %d MB)%s%s" % (
-            src.get("beschriftung", src["name"]), new, changed, fmt(new_b), same, big, cfg.get("max_mb", 200),
+        log("%s%s: %d neu, %d geändert (%s) · %d unverändert · %d zu groß (> %d MB)%s%s" % (
+            src.get("beschriftung", src["name"]), " / " + a.ordner if a.ordner else "", new, changed, fmt(new_b), same, big, cfg.get("max_mb", 200),
             " · %d nur in Cloud übersprungen" % cloud if cloud else "",
             " · %d Fehler" % errors if errors else ""))
     if a.los:
