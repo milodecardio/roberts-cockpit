@@ -1,0 +1,23 @@
+[Unit]
+Description=Roberts Cockpit – Hintergrundverarbeitung (Text auslesen, Vektoren)
+After=network.target ollama.service roberts-cockpit.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=cockpit
+WorkingDirectory=/opt/roberts-cockpit
+EnvironmentFile=/opt/roberts-cockpit/.env
+ExecStart=/usr/bin/python3 /opt/roberts-cockpit/worker.py
+Restart=always
+RestartSec=10
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=150%
+MemoryMax=1200M
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

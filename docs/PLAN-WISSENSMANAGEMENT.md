@@ -54,7 +54,12 @@ Noch offen: Material an weitere Karte hängen (außer durch erneuten Upload), No
 - Volltextsuche (SQLite FTS5) über Karten und Dokumente.
 - Ab einigen GB Dateien: **Hetzner Storage Box** (1 TB) einbinden – 40 GB reichen nicht für Video/Audio.
 
-### Etappe 3 – Text gewinnen und vektorisieren
+### Etappe 3 – Text gewinnen und vektorisieren ✅ live seit 07.11.2026
+Umgesetzt: `extract.py` (PDF inkl. OCR für Scans, Word/Excel/PowerPoint, ODF, alte .doc/.xls, CSV, E-Mail,
+Fotos inkl. HEIC per OCR), `worker.py` als Dienst `cockpit-worker` (niedrige Priorität, max. 1,2 GB RAM),
+Vektoren mit bge-m3 für Materialien und Karten, Bedeutungssuche (`/api/semantic`), „Passend dazu“ in Karten,
+📚 Bibliothek (Dateien ohne Karte, Filter nach Quelle/Status, an Karte hängen).
+Import vom Mac/OneDrive: `scripts/cockpit_import.py` (Probelauf, Schlüsselbund, überspringt Unverändertes).
 Jede Datei wird in Text umgewandelt, in Abschnitte geteilt und mit bge-m3 vektorisiert:
 
 | Typ | Weg zum Text | Hinweis |

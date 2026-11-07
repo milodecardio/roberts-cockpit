@@ -124,6 +124,21 @@
   .hit .s{color:var(--mut);font-size:12px}
   .hit mark{background:rgba(110,168,254,.3);color:var(--txt);border-radius:3px;padding:0 1px}
   .hit .cl{color:var(--acc);cursor:pointer;font-size:12px}
+  /* Etappe 3: Bibliothek, Bedeutungssuche */
+  .st{font-size:11px;margin-left:4px}
+  .lib{max-width:1100px}
+  .lib .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  .lib .bar input{max-width:360px}
+  .lib .bar select{max-width:200px}
+  .lib .stats{font-size:12.5px;color:var(--mut);margin-bottom:12px}
+  .lib .doc .bd .s{font-size:12px;color:var(--mut);margin-top:3px}
+  .lib .more{margin:10px 0}
+  .rel{margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
+  .rel h4{margin:0 0 8px;font-size:13px;color:var(--mut);font-weight:600}
+  .pick{max-height:50vh;overflow:auto;margin-top:8px}
+  .pick .pc{padding:7px 9px;border:1px solid var(--line);border-radius:8px;margin-bottom:5px;cursor:pointer;font-size:13px;background:var(--panel2)}
+  .pick .pc:hover{border-color:var(--acc)}
+  .pick .pc small{color:var(--mut)}
   @media(max-width:760px){.grid2,.frow{grid-template-columns:1fr}}
 </style>
 </head>
@@ -240,12 +255,12 @@ function startPoll(){
 // ─── Nav & Filters ───────────────────────────────────────
 let activeView="board",filterCat="alle",filterSub="alle",searchQ="";
 
-const VIEWS=[["board","🗂 Kanban"],["ctx","📋 Kontext & Anforderungen"]];
+const VIEWS=[["board","🗂 Kanban"],["lib","📚 Bibliothek"],["ctx","📋 Kontext & Anforderungen"]];
 function renderNav(){
   document.getElementById("nav").innerHTML=
     VIEWS.map(([id,l])=>`<button class="${id===activeView?'active':''}" onclick="setView('${id}')">${l}</button>`).join("");
 }
-function setView(v){activeView=v;renderNav();render();}
+function setView(v){activeView=v;if(v==="lib")lib.loaded=false;renderNav();render();}
 function renderFilters(){
   const f=document.getElementById("filters");
   if(activeView!=="board"){f.style.display="none";return;}
@@ -267,7 +282,7 @@ function setFilter(c){filterCat=c;filterSub="alle";render();}
 function setSub(i){filterSub=i==="alle"?"alle":_subs[i];render();}
 function render(){
   renderFilters();
-  document.getElementById("view").innerHTML=activeView==="board"?renderBoard():renderCtx();
+  document.getElementById("view").innerHTML=activeView==="board"?renderBoard():activeView==="lib"?renderLib():renderCtx();
   if(activeView==="board")setTimeout(()=>{const s=document.getElementById("search");if(s&&searchQ){s.focus();s.setSelectionRange(s.value.length,s.value.length);}},0);
 }
 function visible(c){
@@ -285,7 +300,7 @@ let srv={q:"",cards:new Set(),docs:[]},_srvT=null,docCounts={};
 function serverSearch(){
   clearTimeout(_srvT);
   const q=searchQ.trim();
-  if(!q){srv={q:"",cards:new Set(),docs:[]};return;}
+  if(!q){srv={q:"",cards:new Set(),docs:[]};sem={q:"",cards:[],docs:[]};return;}
   _srvT=setTimeout(async()=>{
     try{
       const r=await fetch('/api/search?q='+encodeURIComponent(q));
@@ -295,7 +310,32 @@ function serverSearch(){
       srv={q,cards:new Set(d.cards),docs:d.docs};
       render();
     }catch(e){}
-  },300);
+    // Bedeutungssuche (bge-m3) – etwas langsamer, kommt hinterher
+    try{
+      const r=await fetch('/api/semantic?q='+encodeURIComponent(q));
+      if(!r.ok)return;
+      const d=await r.json();
+      if(searchQ.trim()!==q||!d.available)return;
+      sem={q,cards:d.cards,docs:d.docs};
+      render();
+    }catch(e){}
+  },400);
+}
+let sem={q:"",cards:[],docs:[]};
+function semHTML(){
+  if(!searchQ.trim()||sem.q!==searchQ.trim())return"";
+  const seenDocs=new Set(srv.docs.map(d=>d.id));
+  const docs=sem.docs.filter(d=>!seenDocs.has(d.id)&&d.score>=0.40).slice(0,8);
+  const cards=sem.cards.filter(c=>c.score>=0.45).map(c=>state.cards.find(x=>x.id===c.id)).filter(Boolean).slice(0,6);
+  if(!docs.length&&!cards.length)return"";
+  return `<div class="hits" style="border-left-color:var(--acc2)"><h4>🧠 Ähnliche Bedeutung</h4>
+    ${cards.length?`<div class="hit"><span class="s">Karten:</span> ${cards.map(c=>`<span class="cl" onclick="editCard('${c.id}')">${esc(c.t)}</span>`).join(" · ")}</div>`:""}
+    ${docs.map(d=>{const cs=d.cards.map(id=>state.cards.find(c=>c.id===id)).filter(Boolean);
+      return `<div class="hit">${d.kind==="file"?fileIcon(d.mime):DOC_IC[d.kind]} ${docLink(d)}
+        <div class="s">${esc(d.snippet)}</div>
+        <div>${cs.map(c=>`<span class="cl" onclick="editCard('${c.id}')">→ ${esc(c.t)}</span>`).join(" · ")}
+        <span class="cl" onclick="pickCard(${d.id})">＋ an Karte hängen</span></div></div>`;}).join("")}
+  </div>`;
 }
 async function loadDocCounts(){
   try{const r=await fetch('/api/doc-counts');if(r.ok){docCounts=await r.json();if(activeView==="board")render();}}catch(e){}
@@ -313,7 +353,7 @@ function hitsHTML(){
 
 // ─── Board ───────────────────────────────────────────────
 function renderBoard(){
-  let html=`<div class="banner">Neue Aufgaben landen im <b>📥 Eingang</b> – von dort per Drag&Drop einsortieren. Bereich wählen, dann nach <b>Unterthema</b> filtern. <b>⇅ Prio / ⇅ Kat</b> sortiert die Spalte. Karte anklicken → unten <b>📎 Materialien</b>: Dateien, Fotos, Links und Notizen anhängen. Die Suche findet auch Inhalte in Materialien.</div>${hitsHTML()}<div class="board">`;
+  let html=`<div class="banner">Neue Aufgaben landen im <b>📥 Eingang</b> – von dort per Drag&Drop einsortieren. Bereich wählen, dann nach <b>Unterthema</b> filtern. <b>⇅ Prio / ⇅ Kat</b> sortiert die Spalte. Karte anklicken → unten <b>📎 Materialien</b>: Dateien, Fotos, Links und Notizen anhängen. Die Suche findet auch Inhalte in Materialien.</div>${hitsHTML()}${semHTML()}<div class="board">`;
   for(const [id,label] of COLS){
     const cards=state.cards.filter(c=>c.col===id&&visible(c));
     html+=`<div class="col ${id}"
@@ -452,11 +492,103 @@ function editCard(id,col){
       <div class="hint" style="margin-top:6px">Materialien werden sofort gespeichert. Dateien auch per Drag&Drop hierher ziehen.</div>`
       :`<div class="hint">Erst <b>Speichern</b>, dann können Materialien angehängt werden.</div>`}
     </div>
+    ${id?`<div class="rel" id="rel"></div>`:""}
     <div class="modal-actions">${id?`<button class="btn" style="margin-right:auto;color:var(--steuer)" onclick="delCard('${c.id}')">Löschen</button>`:""}
       <button class="btn" onclick="closeM()">Abbrechen</button>
       <button class="btn primary" onclick="saveCard('${c.id}',${!!id})">Speichern</button></div>`;
   M.classList.add("open");
-  if(id)loadDocs(c.id);
+  if(id){loadDocs(c.id);loadRelated(c.id);}
+}
+
+// ─── Etappe 3: „Passend dazu“, Bibliothek, an Karte hängen ─────────
+function statusBadge(d){
+  if(d.kind!=="file")return"";
+  const s=d.text_status;
+  return s==="pending"?`<span class="st" title="Text wird gerade ausgelesen">⏳ wird ausgelesen</span>`
+    :s==="failed"?`<span class="st" title="${esc(d.text_error||"")}">⚠️ nicht lesbar</span>`
+    :s==="skipped"?`<span class="st" title="${esc(d.text_error||"")}">ⓘ nur Titel durchsuchbar</span>`:"";
+}
+async function loadRelated(cid){
+  const el=document.getElementById("rel");if(!el)return;
+  try{
+    const r=await fetch(`/api/cards/${encodeURIComponent(cid)}/related`);
+    if(!r.ok)return;
+    const d=await r.json();
+    if(!document.getElementById("rel"))return;
+    if(!d.available){el.innerHTML="";return;}
+    const docs=d.docs.filter(x=>x.score>=0.40);
+    const cards=d.cards.filter(x=>x.score>=0.50).map(x=>state.cards.find(c=>c.id===x.id)).filter(Boolean);
+    if(!docs.length&&!cards.length){el.innerHTML="";return;}
+    el.innerHTML=`<h4>🧠 Passend dazu</h4>
+      ${docs.map(x=>`<div class="doc"><span class="ic">${x.kind==="file"?fileIcon(x.mime):DOC_IC[x.kind]}</span>
+        <div class="bd">${docLink(x)}<div class="m">${esc((x.snippet||"").slice(0,160))}</div></div>
+        <button class="btn sm" title="An diese Karte hängen" onclick="attachDoc('${cid}',${x.id})">＋</button></div>`).join("")}
+      ${cards.length?`<div class="m" style="font-size:12px;margin-top:4px">Ähnliche Karten: ${cards.map(c=>`<span class="cl" style="color:var(--acc);cursor:pointer" onclick="editCard('${c.id}')">${esc(c.t)}</span>`).join(" · ")}</div>`:""}`;
+  }catch(e){}
+}
+async function attachDoc(cid,docId,quiet){
+  try{
+    const r=await fetch(`/api/cards/${encodeURIComponent(cid)}/attach`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({doc_id:docId})});
+    const d=await r.json();
+    if(!r.ok){toast("⚠️ "+(d.error||"Fehler"));return false;}
+    toast("📎 An Karte gehängt");
+    docCounts[cid]=(docCounts[cid]||0)+1;
+    if(!quiet&&document.getElementById("docList")){loadDocs(cid);loadRelated(cid);}
+    return true;
+  }catch(e){toast("⚠️ Keine Verbindung zum Server");return false;}
+}
+function pickCard(docId){
+  document.getElementById("modal").innerHTML=`<h3>An welche Karte hängen?</h3>
+    <input id="pk_q" placeholder="Karte suchen…" oninput="renderPick(${docId})">
+    <div class="pick" id="pk_list"></div>
+    <div class="modal-actions"><button class="btn" onclick="closeM()">Abbrechen</button></div>`;
+  M.classList.add("open");renderPick(docId);document.getElementById("pk_q").focus();
+}
+function renderPick(docId){
+  const q=(document.getElementById("pk_q").value||"").toLowerCase();
+  const list=state.cards.filter(c=>!q||(c.t+" "+(c.sub||"")+" "+(c.note||"")).toLowerCase().includes(q)).slice(0,60);
+  document.getElementById("pk_list").innerHTML=list.map(c=>`<div class="pc" onclick="pickDone('${c.id}',${docId})">${esc(c.t)}<br><small>${esc((CATS[c.cat]||[""])[0])}${c.sub?" · "+esc(c.sub):""}</small></div>`).join("")||`<div class="hint">Keine Karte gefunden.</div>`;
+}
+async function pickDone(cid,docId){if(await attachDoc(cid,docId,true)){closeM();render();if(activeView==="lib")loadLib();}}
+
+let lib={q:"",origin:"",status:"",items:[],total:0,loaded:false,stats:null,offset:0};
+function renderLib(){
+  if(!lib.loaded){setTimeout(loadLib,0);}
+  const s=lib.stats;
+  const n=k=>(s&&s.docs[k])||0;
+  const origins=s?Object.keys(s.origins):[];
+  const ON={upload:"Hochgeladen",mac:"Mac",onedrive:"OneDrive",outlook:"Outlook"};
+  return `<div class="lib">
+    <div class="bar">
+      <input id="lib_q" placeholder="🔍 in der Bibliothek suchen…" value="${esc(lib.q)}" onkeydown="if(event.key==='Enter'){lib.q=this.value;lib.offset=0;loadLib()}">
+      <select onchange="lib.origin=this.value;lib.offset=0;loadLib()"><option value="">Alle Quellen</option>${origins.map(o=>`<option value="${esc(o)}" ${lib.origin===o?"selected":""}>${esc(ON[o]||o)} (${s.origins[o]})</option>`).join("")}</select>
+      <select onchange="lib.status=this.value;lib.offset=0;loadLib()">
+        <option value="">Alle</option><option value="pending" ${lib.status==="pending"?"selected":""}>⏳ wird ausgelesen</option>
+        <option value="done" ${lib.status==="done"?"selected":""}>✅ durchsuchbar</option>
+        <option value="skipped" ${lib.status==="skipped"?"selected":""}>ⓘ nur Titel</option>
+        <option value="failed" ${lib.status==="failed"?"selected":""}>⚠️ nicht lesbar</option></select>
+      <button class="btn sm" onclick="lib.q=document.getElementById('lib_q').value;lib.offset=0;loadLib()">Suchen</button>
+    </div>
+    <div class="stats">${s?`${n("done")+n("pending")+n("skipped")+n("failed")} Materialien · ${fmtSize(s.bytes)} · ✅ ${n("done")} durchsuchbar · ⏳ ${n("pending")} in Arbeit · ⓘ ${n("skipped")} nur Titel · ⚠️ ${n("failed")} nicht lesbar · ${s.chunks} Abschnitte vektorisiert`:"lädt…"}</div>
+    ${lib.items.map(d=>{const cs=d.cards.map(id=>state.cards.find(c=>c.id===id)).filter(Boolean);
+      return `<div class="doc"><span class="ic">${d.kind==="file"?fileIcon(d.mime):DOC_IC[d.kind]}</span>
+      <div class="bd">${docLink(d)}${statusBadge(d)}
+        <div class="m">${d.origin_path?esc(d.origin_path)+" · ":""}${d.size?fmtSize(d.size)+" · ":""}${new Date(d.created_at*1000).toLocaleDateString("de-DE")}</div>
+        <div class="s">${cs.map(c=>`<span class="cl" style="color:var(--acc);cursor:pointer" onclick="editCard('${c.id}')">→ ${esc(c.t)}</span>`).join(" · ")}
+        <span class="cl" style="color:var(--acc);cursor:pointer" onclick="pickCard(${d.id})">＋ an Karte hängen</span></div>
+      </div></div>`;}).join("")||(lib.loaded?`<div class="hint">Keine Materialien gefunden.</div>`:"")}
+    ${lib.items.length<lib.total?`<button class="btn more" onclick="lib.offset+=100;loadLib(true)">Weitere laden (${lib.total-lib.items.length})</button>`:""}
+  </div>`;
+}
+async function loadLib(append){
+  try{
+    const p=new URLSearchParams({q:lib.q,origin:lib.origin,status:lib.status,offset:lib.offset,limit:100});
+    const [r1,r2]=await Promise.all([fetch('/api/library?'+p),fetch('/api/status')]);
+    if(r1.ok){const d=await r1.json();lib.items=append?lib.items.concat(d.items):d.items;lib.total=d.total;}
+    if(r2.ok)lib.stats=await r2.json();
+    lib.loaded=true;
+    if(activeView==="lib")render();
+  }catch(e){}
 }
 
 const DOC_IC={file:"📄",link:"🔗",note:"📝"};
@@ -478,7 +610,7 @@ async function loadDocs(cid){
     if(!document.getElementById("docList"))return;
     el.innerHTML=docs.length?docs.map(d=>`<div class="doc">
       <span class="ic">${d.kind==="file"?fileIcon(d.mime):DOC_IC[d.kind]}</span>
-      <div class="bd">${docLink(d)}
+      <div class="bd">${docLink(d)}${statusBadge(d)}
         <div class="m">${d.kind==="file"?esc(d.filename)+" · "+fmtSize(d.size)+" · ":d.kind==="link"?esc(d.url)+" · ":""}${new Date(d.created_at*1000).toLocaleDateString("de-DE")}</div>
         ${d.kind==="note"&&noteRest(d)?`<div class="nb">${esc(noteRest(d))}</div>`:""}
         ${d.kind==="file"&&/^image\/(png|jpeg|gif|webp)$/.test(d.mime||"")?`<a href="${esc(docHref(d))}" target="_blank"><img class="th" loading="lazy" src="${esc(docHref(d))}" alt=""></a>`:""}

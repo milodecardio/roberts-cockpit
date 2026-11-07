@@ -18,7 +18,7 @@ import threading
 import time
 
 CORE = ("col", "cat", "prio", "t", "note", "src", "sub", "owner")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -66,7 +66,52 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5 (
     kind UNINDEXED, ref UNINDEXED, title, body,
     tokenize = 'unicode61 remove_diacritics 2'
 );
+
+-- Etappe 3: ausgelesener Text, Vektor-Abschnitte, Importquellen
+CREATE TABLE IF NOT EXISTS doc_text (
+    doc_id       INTEGER PRIMARY KEY REFERENCES documents (id),
+    text         TEXT NOT NULL,
+    extracted_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chunks (
+    id         INTEGER PRIMARY KEY,
+    owner_kind TEXT NOT NULL CHECK (owner_kind IN ('doc', 'card')),
+    owner_id   TEXT NOT NULL,
+    idx        INTEGER NOT NULL,
+    text       TEXT NOT NULL,
+    embedding  BLOB NOT NULL,
+    model      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chunks_owner ON chunks (owner_kind, owner_id);
+CREATE TABLE IF NOT EXISTS sources (
+    source  TEXT NOT NULL,
+    ref     TEXT NOT NULL,
+    doc_id  INTEGER NOT NULL REFERENCES documents (id),
+    mtime   REAL,
+    size    INTEGER,
+    seen_at REAL NOT NULL,
+    PRIMARY KEY (source, ref)
+);
+CREATE INDEX IF NOT EXISTS sources_doc ON sources (doc_id);
 """
+
+# Spalten, die nach Version 2 dazugekommen sind (ALTER TABLE ist nicht „IF NOT EXISTS“-fähig)
+_ADD_COLUMNS = [
+    ("documents", "text_status", "TEXT NOT NULL DEFAULT 'pending'"),
+    ("documents", "text_error", "TEXT"),
+    ("documents", "processed_at", "REAL"),
+    ("documents", "origin", "TEXT"),
+    ("documents", "origin_path", "TEXT"),
+    ("cards", "embedded_at", "REAL"),
+]
+
+
+def _migrate_columns(conn):
+    for table, col, decl in _ADD_COLUMNS:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(%s)" % table)}
+        if col not in cols:
+            conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, decl))
+    conn.execute("CREATE INDEX IF NOT EXISTS documents_status ON documents (text_status, deleted_at)")
 
 _write_lock = threading.Lock()
 
@@ -87,11 +132,14 @@ def init(path, legacy_json=None):
     """Legt die Datenbank an und übernimmt einmalig die alte JSON-Datei."""
     conn = _connect(path)
     try:
+        old_version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.executescript(_SCHEMA)
+        _migrate_columns(conn)
         conn.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
         count = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
-        _reindex_cards(conn)
-        _reindex_docs(conn)
+        if old_version < SCHEMA_VERSION:
+            _reindex_cards(conn)
+            _reindex_docs(conn)
         conn.commit()
     finally:
         conn.close()
@@ -221,17 +269,33 @@ def _reindex_cards(conn):
     )
 
 
-def _doc_index_row(d):
-    body = " ".join(x for x in (d["filename"], d["url"], d["body"]) if x)
+def _doc_index_row(d, text=None):
+    keys = d.keys()
+    extra = d["origin_path"] if "origin_path" in keys else None
+    body = " ".join(x for x in (d["filename"], d["url"], d["body"], extra, text) if x)
     return ("doc", str(d["id"]), d["title"] or "", body)
+
+
+def _reindex_doc(conn, doc_id):
+    conn.execute("DELETE FROM search WHERE kind = 'doc' AND ref = ?", (str(doc_id),))
+    d = conn.execute(
+        "SELECT d.*, t.text AS fulltext FROM documents d LEFT JOIN doc_text t ON t.doc_id = d.id "
+        "WHERE d.id = ? AND d.deleted_at IS NULL", (doc_id,)
+    ).fetchone()
+    if d:
+        conn.execute("INSERT INTO search (kind, ref, title, body) VALUES (?, ?, ?, ?)",
+                     _doc_index_row(d, d["fulltext"]))
 
 
 def _reindex_docs(conn):
     conn.execute("DELETE FROM search WHERE kind = 'doc'")
-    rows = conn.execute("SELECT * FROM documents WHERE deleted_at IS NULL").fetchall()
+    rows = conn.execute(
+        "SELECT d.*, t.text AS fulltext FROM documents d LEFT JOIN doc_text t ON t.doc_id = d.id "
+        "WHERE d.deleted_at IS NULL"
+    ).fetchall()
     conn.executemany(
         "INSERT INTO search (kind, ref, title, body) VALUES (?, ?, ?, ?)",
-        [_doc_index_row(d) for d in rows],
+        [_doc_index_row(d, d["fulltext"]) for d in rows],
     )
 
 
@@ -287,11 +351,16 @@ class NotFound(Exception):
 
 
 def _doc_dict(d):
-    return {
+    keys = d.keys()
+    out = {
         "id": d["id"], "kind": d["kind"], "title": d["title"], "filename": d["filename"],
         "mime": d["mime"], "size": d["size"], "url": d["url"], "body": d["body"],
         "created_at": d["created_at"],
     }
+    for k in ("text_status", "text_error", "origin", "origin_path"):
+        if k in keys:
+            out[k] = d[k]
+    return out
 
 
 def _require_card(conn, card_id):
@@ -354,7 +423,7 @@ def add_doc(path, card_id, kind, title="", filename=None, mime=None, size=None,
             else:
                 cur = conn.execute(
                     "INSERT INTO documents (kind, title, filename, mime, size, sha256, url, body, "
-                    "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "created_at, updated_at, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'upload')",
                     (kind, title or "", filename, mime, size, sha256, url, body, now, now),
                 )
                 doc_id = cur.lastrowid
@@ -363,10 +432,7 @@ def add_doc(path, card_id, kind, title="", filename=None, mime=None, size=None,
                 (card_id, doc_id, now),
             )
             d = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
-            conn.execute("DELETE FROM search WHERE kind = 'doc' AND ref = ?", (str(doc_id),))
-            conn.execute(
-                "INSERT INTO search (kind, ref, title, body) VALUES (?, ?, ?, ?)", _doc_index_row(d)
-            )
+            _reindex_doc(conn, doc_id)
             conn.commit()
             return _doc_dict(d)
         except Exception:
@@ -392,7 +458,10 @@ def unlink_doc(path, card_id, doc_id):
             left = conn.execute(
                 "SELECT COUNT(*) FROM card_documents WHERE doc_id = ?", (doc_id,)
             ).fetchone()[0]
-            if left == 0:
+            imported = conn.execute(
+                "SELECT 1 FROM sources WHERE doc_id = ? LIMIT 1", (doc_id,)
+            ).fetchone()
+            if left == 0 and not imported:  # importierte Dateien bleiben in der Bibliothek
                 conn.execute(
                     "UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?",
                     (now, now, doc_id),
@@ -418,3 +487,285 @@ def get_file_doc(path, doc_id):
     if not d:
         raise NotFound("Datei nicht gefunden")
     return d
+
+
+def attach_doc(path, card_id, doc_id):
+    """Hängt ein vorhandenes Material (z. B. aus der Bibliothek) an eine Karte."""
+    now = time.time()
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            _require_card(conn, card_id)
+            d = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+            if not d:
+                raise NotFound("Material nicht gefunden")
+            if d["deleted_at"] is not None:
+                conn.execute("UPDATE documents SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+                             (now, doc_id))
+            conn.execute(
+                "INSERT OR IGNORE INTO card_documents (card_id, doc_id, created_at) VALUES (?, ?, ?)",
+                (card_id, doc_id, now),
+            )
+            _reindex_doc(conn, doc_id)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+# ─── Bibliothek & Import (Etappe 3) ───────────────────────────────────
+
+def library(path, q="", origin="", status="", limit=100, offset=0):
+    where = ["d.deleted_at IS NULL"]
+    args = []
+    if origin:
+        where.append("d.origin = ?")
+        args.append(origin)
+    if status:
+        where.append("d.text_status = ?")
+        args.append(status)
+    if q.strip():
+        fq = _fts_query(q)
+        if fq:
+            where.append("CAST(d.id AS TEXT) IN (SELECT ref FROM search WHERE kind = 'doc' AND search MATCH ?)")
+            args.append(fq)
+    sql_where = " AND ".join(where)
+    conn = _connect(path)
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM documents d WHERE " + sql_where, args).fetchone()[0]
+        rows = conn.execute(
+            "SELECT d.*, (SELECT COUNT(*) FROM card_documents cd JOIN cards c ON c.id = cd.card_id "
+            "             WHERE cd.doc_id = d.id AND c.deleted_at IS NULL) AS ncards "
+            "FROM documents d WHERE " + sql_where + " ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?",
+            args + [limit, offset],
+        ).fetchall()
+        items = []
+        for r in rows:
+            item = _doc_dict(r)
+            item["cards"] = [x["card_id"] for x in conn.execute(
+                "SELECT cd.card_id FROM card_documents cd JOIN cards c ON c.id = cd.card_id "
+                "WHERE cd.doc_id = ? AND c.deleted_at IS NULL", (r["id"],))]
+            items.append(item)
+    finally:
+        conn.close()
+    return {"total": total, "items": items}
+
+
+def status(path):
+    conn = _connect(path)
+    try:
+        by = {r[0]: r[1] for r in conn.execute(
+            "SELECT text_status, COUNT(*) FROM documents WHERE deleted_at IS NULL GROUP BY text_status")}
+        origins = {(r[0] or "upload"): r[1] for r in conn.execute(
+            "SELECT origin, COUNT(*) FROM documents WHERE deleted_at IS NULL GROUP BY origin")}
+        chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        cards_todo = conn.execute(
+            "SELECT COUNT(*) FROM cards WHERE deleted_at IS NULL AND "
+            "(embedded_at IS NULL OR embedded_at < updated_at)").fetchone()[0]
+        size = conn.execute(
+            "SELECT coalesce(SUM(size), 0) FROM documents WHERE deleted_at IS NULL AND kind = 'file'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    return {"docs": by, "origins": origins, "chunks": chunks, "cards_pending": cards_todo, "bytes": size}
+
+
+def import_known(path, source):
+    conn = _connect(path)
+    try:
+        return {r["ref"]: [r["mtime"], r["size"]] for r in conn.execute(
+            "SELECT ref, mtime, size FROM sources WHERE source = ?", (source,))}
+    finally:
+        conn.close()
+
+
+def add_import_doc(path, source, ref, mtime, size, filename, mime, sha256, origin_path):
+    """Datei aus einer Quelle (Mac, OneDrive, …) in die Bibliothek aufnehmen.
+    Gleicher Inhalt → vorhandenes Material wird wiederverwendet."""
+    now = time.time()
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            d = conn.execute(
+                "SELECT * FROM documents WHERE kind = 'file' AND sha256 = ? "
+                "ORDER BY deleted_at IS NOT NULL, id LIMIT 1", (sha256,)
+            ).fetchone()
+            if d:
+                doc_id = d["id"]
+                conn.execute(
+                    "UPDATE documents SET deleted_at = NULL, updated_at = ?, "
+                    "origin = coalesce(origin, ?), origin_path = coalesce(origin_path, ?) WHERE id = ?",
+                    (now, source, origin_path, doc_id))
+                created = False
+            else:
+                cur = conn.execute(
+                    "INSERT INTO documents (kind, title, filename, mime, size, sha256, created_at, "
+                    "updated_at, origin, origin_path) VALUES ('file', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (os.path.splitext(filename)[0], filename, mime, size, sha256, now, now,
+                     source, origin_path))
+                doc_id = cur.lastrowid
+                created = True
+            conn.execute(
+                "INSERT INTO sources (source, ref, doc_id, mtime, size, seen_at) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(source, ref) DO UPDATE SET doc_id = excluded.doc_id, mtime = excluded.mtime, "
+                "size = excluded.size, seen_at = excluded.seen_at",
+                (source, ref, doc_id, mtime, size, now))
+            _reindex_doc(conn, doc_id)
+            conn.commit()
+            return {"id": doc_id, "created": created}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+# ─── Verarbeitung: Text & Vektoren (für worker.py) ────────────────────
+
+def pending_docs(path, limit=5):
+    conn = _connect(path)
+    try:
+        return conn.execute(
+            "SELECT * FROM documents WHERE text_status = 'pending' AND deleted_at IS NULL "
+            "ORDER BY id LIMIT ?", (limit,)).fetchall()
+    finally:
+        conn.close()
+
+
+def store_doc_result(path, doc_id, status_, text=None, error=None, chunks=(), model=None):
+    """chunks: Liste von (text, embedding_bytes)."""
+    now = time.time()
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            if text is not None:
+                conn.execute(
+                    "INSERT INTO doc_text (doc_id, text, extracted_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(doc_id) DO UPDATE SET text = excluded.text, extracted_at = excluded.extracted_at",
+                    (doc_id, text, now))
+            conn.execute("DELETE FROM chunks WHERE owner_kind = 'doc' AND owner_id = ?", (str(doc_id),))
+            conn.executemany(
+                "INSERT INTO chunks (owner_kind, owner_id, idx, text, embedding, model) VALUES ('doc', ?, ?, ?, ?, ?)",
+                [(str(doc_id), i, t, e, model) for i, (t, e) in enumerate(chunks)])
+            conn.execute(
+                "UPDATE documents SET text_status = ?, text_error = ?, processed_at = ? WHERE id = ?",
+                (status_, error, now, doc_id))
+            _reindex_doc(conn, doc_id)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+def cards_to_embed(path, limit=32):
+    conn = _connect(path)
+    try:
+        return conn.execute(
+            "SELECT * FROM cards WHERE deleted_at IS NULL AND "
+            "(embedded_at IS NULL OR embedded_at < updated_at) ORDER BY pos LIMIT ?", (limit,)).fetchall()
+    finally:
+        conn.close()
+
+
+def store_card_vectors(path, items, model):
+    """items: Liste von (card_id, text, embedding_bytes, updated_at_beim_lesen)."""
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            for cid, text, emb, upd in items:
+                conn.execute("DELETE FROM chunks WHERE owner_kind = 'card' AND owner_id = ?", (cid,))
+                conn.execute(
+                    "INSERT INTO chunks (owner_kind, owner_id, idx, text, embedding, model) VALUES ('card', ?, 0, ?, ?, ?)",
+                    (cid, text, emb, model))
+                conn.execute("UPDATE cards SET embedded_at = ? WHERE id = ?", (upd, cid))
+            # Vektoren gelöschter Karten entfernen
+            conn.execute(
+                "DELETE FROM chunks WHERE owner_kind = 'card' AND owner_id IN "
+                "(SELECT id FROM cards WHERE deleted_at IS NOT NULL)")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+def vector_signature(path):
+    conn = _connect(path)
+    try:
+        r = conn.execute("SELECT COUNT(*), coalesce(MAX(id), 0) FROM chunks").fetchone()
+        return (r[0], r[1])
+    finally:
+        conn.close()
+
+
+def all_vectors(path):
+    conn = _connect(path)
+    try:
+        return conn.execute("SELECT id, owner_kind, owner_id, embedding FROM chunks ORDER BY id").fetchall()
+    finally:
+        conn.close()
+
+
+def chunk_texts(path, ids):
+    if not ids:
+        return {}
+    conn = _connect(path)
+    try:
+        q = "SELECT id, text FROM chunks WHERE id IN (%s)" % ",".join("?" * len(ids))
+        return {r["id"]: r["text"] for r in conn.execute(q, list(ids))}
+    finally:
+        conn.close()
+
+
+def docs_by_ids(path, ids):
+    if not ids:
+        return {}
+    conn = _connect(path)
+    try:
+        q = "SELECT * FROM documents WHERE deleted_at IS NULL AND id IN (%s)" % ",".join("?" * len(ids))
+        out = {}
+        for r in conn.execute(q, [int(i) for i in ids]):
+            item = _doc_dict(r)
+            item["cards"] = [x["card_id"] for x in conn.execute(
+                "SELECT cd.card_id FROM card_documents cd JOIN cards c ON c.id = cd.card_id "
+                "WHERE cd.doc_id = ? AND c.deleted_at IS NULL", (r["id"],))]
+            out[str(r["id"])] = item
+        return out
+    finally:
+        conn.close()
+
+
+def alive_card_ids(path):
+    conn = _connect(path)
+    try:
+        return {r[0] for r in conn.execute("SELECT id FROM cards WHERE deleted_at IS NULL")}
+    finally:
+        conn.close()
+
+
+def card_doc_ids(path, card_id):
+    conn = _connect(path)
+    try:
+        return {str(r[0]) for r in conn.execute(
+            "SELECT doc_id FROM card_documents WHERE card_id = ?", (card_id,))}
+    finally:
+        conn.close()
+
+
+def card_vector(path, card_id):
+    conn = _connect(path)
+    try:
+        r = conn.execute(
+            "SELECT embedding FROM chunks WHERE owner_kind = 'card' AND owner_id = ?", (card_id,)).fetchone()
+        return r["embedding"] if r else None
+    finally:
+        conn.close()

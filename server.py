@@ -26,10 +26,17 @@ import re
 import socket
 import socketserver
 import tempfile
+import threading
 import urllib.parse
 import webbrowser
 
+try:
+    import numpy as np  # schnelle Vektorsuche (Server: python3-numpy); ohne geht es langsamer
+except ImportError:
+    np = None
+
 import db
+import embed
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Übergangsweise weiter mitgeschrieben (Rückweg + lesbares Backup).
@@ -123,9 +130,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if method == "GET" and p == "/api/doc-counts":
                 self._json(200, db.doc_counts(DB_PATH))
                 return True
+            qs = {k: v[0] for k, v in urllib.parse.parse_qs(parts.query).items()}
             if method == "GET" and p == "/api/search":
-                q = urllib.parse.parse_qs(parts.query).get("q", [""])[0]
-                self._json(200, db.search(DB_PATH, q))
+                self._json(200, db.search(DB_PATH, qs.get("q", "")))
+                return True
+            # ─── Etappe 3: Bedeutungssuche, Bibliothek, Import ───
+            if method == "GET" and p == "/api/semantic":
+                self._json(200, VECTORS.search_text(qs.get("q", "")))
+                return True
+            if method == "GET" and p == "/api/status":
+                self._json(200, db.status(DB_PATH))
+                return True
+            if method == "GET" and p == "/api/library":
+                self._json(200, db.library(DB_PATH, q=qs.get("q", ""), origin=qs.get("origin", ""),
+                                           status=qs.get("status", ""),
+                                           limit=min(int(qs.get("limit", "100")), 500),
+                                           offset=int(qs.get("offset", "0"))))
+                return True
+            if method == "GET" and p == "/api/import/known":
+                self._json(200, db.import_known(DB_PATH, qs.get("source", "")))
+                return True
+            if method == "POST" and p == "/api/import/file":
+                self._json(200, self._receive_import())
+                return True
+            m = re.fullmatch(r"/api/cards/([^/]+)/(related|attach)", p)
+            if m:
+                card_id = urllib.parse.unquote(m.group(1))
+                if method == "GET" and m.group(2) == "related":
+                    self._json(200, VECTORS.related_to_card(card_id))
+                elif method == "POST" and m.group(2) == "attach":
+                    db.attach_doc(DB_PATH, card_id, int(self._read_json().get("doc_id", 0)))
+                    self._json(200, {"ok": True})
+                else:
+                    self._send(405, "text/plain", b"method not allowed")
                 return True
             m = re.fullmatch(r"/files/(\d+)(?:/.*)?", p)
             if method == "GET" and m:
@@ -169,6 +206,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return True
 
     def _receive_file(self, card_id):
+        sha, filename, mime, length = self._store_upload()
+        title = os.path.splitext(filename)[0]
+        return db.add_doc(DB_PATH, card_id, "file", title=title, filename=filename,
+                          mime=mime, size=length, sha256=sha)
+
+    def _receive_import(self):
+        """Datei aus dem Import-Skript (Mac/OneDrive/…) in die Bibliothek aufnehmen."""
+        source = (self.headers.get("X-Source") or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9_-]{1,40}", source):
+            raise ValueError("X-Source fehlt oder ungültig")
+        ref = urllib.parse.unquote(self.headers.get("X-Source-Ref", "")).strip()
+        if not ref:
+            raise ValueError("X-Source-Ref fehlt")
+        try:
+            mtime = float(self.headers.get("X-Source-Mtime", "0"))
+        except ValueError:
+            mtime = 0.0
+        origin_path = urllib.parse.unquote(self.headers.get("X-Origin-Path", "")).strip() or None
+        sha, filename, mime, length = self._store_upload()
+        return db.add_import_doc(DB_PATH, source, ref, mtime, length, filename, mime, sha, origin_path)
+
+    def _store_upload(self):
         length = int(self.headers.get("Content-Length", 0))
         if length <= 0:
             raise ValueError("Leere Datei")
@@ -204,9 +263,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if os.path.exists(tmp):
                 os.remove(tmp)
             raise
-        title = os.path.splitext(filename)[0]
-        return db.add_doc(DB_PATH, card_id, "file", title=title, filename=filename,
-                          mime=mime, size=length, sha256=sha)
+        return sha, filename, mime, length
 
     def _send_file(self, doc_id):
         d = db.get_file_doc(DB_PATH, doc_id)
@@ -326,6 +383,89 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         self._send(404, "text/plain", b"not found")
+
+
+class VectorIndex:
+    """Hält alle Vektoren im Speicher (numpy, falls vorhanden) und lädt neu, wenn sich
+    die Datenbank geändert hat. Bei einigen zehntausend Abschnitten völlig ausreichend."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.sig = None
+        self.rows = []      # (chunk_id, owner_kind, owner_id)
+        self.mat = None     # numpy-Matrix oder Liste von array('f')
+
+    def _refresh(self):
+        sig = db.vector_signature(DB_PATH)
+        if sig == self.sig:
+            return
+        data = db.all_vectors(DB_PATH)
+        rows = [(r["id"], r["owner_kind"], r["owner_id"]) for r in data]
+        vecs = [embed.from_blob(r["embedding"]) for r in data]
+        if np is not None and vecs:
+            mat = np.vstack([np.frombuffer(v.tobytes(), dtype=np.float32) for v in vecs])
+        else:
+            mat = vecs
+        self.rows, self.mat, self.sig = rows, mat, sig
+
+    def _scores(self, qv):
+        if np is not None and self.mat is not None and len(self.rows):
+            return (self.mat @ np.asarray(qv, dtype=np.float32)).tolist()
+        return [sum(a * b for a, b in zip(v, qv)) for v in (self.mat or [])]
+
+    def _rank(self, qv, exclude_card=None, exclude_docs=(), k_cards=8, k_docs=12):
+        with self.lock:
+            self._refresh()
+            scores = self._scores(qv)
+            rows = self.rows
+        best = {}
+        for (cid, kind, oid), s in zip(rows, scores):
+            if kind == "card" and oid == exclude_card:
+                continue
+            if kind == "doc" and oid in exclude_docs:
+                continue
+            key = (kind, oid)
+            if key not in best or s > best[key][0]:
+                best[key] = (s, cid)
+        ranked = sorted(best.items(), key=lambda kv: -kv[1][0])
+        alive = db.alive_card_ids(DB_PATH)
+        cards = [(oid, s, cid) for (kind, oid), (s, cid) in ranked if kind == "card" and oid in alive][:k_cards]
+        docs_r = [(oid, s, cid) for (kind, oid), (s, cid) in ranked if kind == "doc"][:k_docs * 2]
+        docs_meta = db.docs_by_ids(DB_PATH, [oid for oid, _, _ in docs_r])
+        docs_r = [x for x in docs_r if x[0] in docs_meta][:k_docs]
+        texts = db.chunk_texts(DB_PATH, [cid for _, _, cid in cards + docs_r])
+        out_docs = []
+        for oid, s, cid in docs_r:
+            item = docs_meta[oid]
+            item["score"] = round(s, 3)
+            item["snippet"] = (texts.get(cid) or "")[:300]
+            out_docs.append(item)
+        return {
+            "available": True,
+            "cards": [{"id": oid, "score": round(s, 3)} for oid, s, _ in cards],
+            "docs": out_docs,
+        }
+
+    def search_text(self, q):
+        q = (q or "").strip()
+        if not q:
+            return {"available": True, "cards": [], "docs": []}
+        try:
+            qv = embed.embed([q], timeout=60)[0]
+        except embed.Unavailable:
+            return {"available": False, "cards": [], "docs": []}
+        return self._rank(qv)
+
+    def related_to_card(self, card_id):
+        blob = db.card_vector(DB_PATH, card_id)
+        if blob is None:
+            return {"available": False, "cards": [], "docs": []}
+        qv = list(embed.from_blob(blob))
+        return self._rank(qv, exclude_card=card_id,
+                          exclude_docs=db.card_doc_ids(DB_PATH, card_id), k_cards=5, k_docs=6)
+
+
+VECTORS = VectorIndex()
 
 
 def _blob_path(sha):
