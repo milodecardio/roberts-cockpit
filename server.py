@@ -44,6 +44,16 @@ STATIC_FILES = {
     "/icons/icon-512.png": ("icons/icon-512.png", "image/png"),
 }
 
+# PWA-Dateien ohne Login ausliefern: Chrome/Android lädt Manifest und Icons
+# ohne Zugangsdaten – mit 401 gilt die App als „nicht installierbar“.
+# Enthalten keine persönlichen Daten.
+PUBLIC_PATHS = {
+    "/manifest.json",
+    "/service-worker.js",
+    "/icons/icon-192.png",
+    "/icons/icon-512.png",
+}
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -97,7 +107,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(404, "text/plain", b"not found")
 
     def do_GET(self):
-        if not self._authorized():
+        if self.path not in PUBLIC_PATHS and not self._authorized():
             self._require_auth()
             return
 

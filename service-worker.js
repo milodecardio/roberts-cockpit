@@ -1,4 +1,4 @@
-const CACHE = "cockpit-shell-v2";
+const CACHE = "cockpit-shell-v3";
 const SHELL = ["/", "/manifest.json", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -23,6 +23,7 @@ self.addEventListener("fetch", (e) => {
   e.respondWith(
     fetch(e.request)
       .then((res) => {
+        if (!res.ok) return res; // keine 401/Fehlerseiten cachen
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy));
         return res;
