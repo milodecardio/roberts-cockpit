@@ -18,6 +18,7 @@ Env-Variablen:
 import base64
 import hashlib
 import hmac
+from html import escape as html_escape
 import http.server
 import json
 import mimetypes
@@ -37,6 +38,8 @@ except ImportError:
 
 import db
 import embed
+import mcp_server
+import oauth
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Übergangsweise weiter mitgeschrieben (Rückweg + lesbares Backup).
@@ -55,6 +58,9 @@ HOST = os.environ.get("COCKPIT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("COCKPIT_PORT", "8077"))
 PRODUCTION = os.environ.get("COCKPIT_ENV") == "production"
 URL = "http://%s:%d/" % (HOST, PORT)
+
+# Öffentliche Adresse (für OAuth/MCP-Metadaten), z. B. https://cockpit.robert-beckert.de
+PUBLIC_URL = (os.environ.get("COCKPIT_PUBLIC_URL") or URL).rstrip("/")
 
 AUTH_USER = os.environ.get("COCKPIT_USER")
 AUTH_PASS = os.environ.get("COCKPIT_PASS")
@@ -79,9 +85,130 @@ PUBLIC_PATHS = {
 }
 
 
+# Etappe 4: Diese Pfade prüfen ihre Berechtigung selbst (OAuth/Bearer statt Basic-Auth)
+OAUTH_PUBLIC = {
+    "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp",
+    "/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server/mcp",
+    "/oauth/register", "/oauth/token", "/mcp",
+}
+CORS = {"Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, Mcp-Protocol-Version, Mcp-Session-Id",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Expose-Headers": "WWW-Authenticate"}
+
+
+class McpContext:
+    path = DB_PATH
+
+    @property
+    def vectors(self):
+        return VECTORS
+
+    @staticmethod
+    def blob_path(sha):
+        return _blob_path(sha)
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
+
+    # ─── Etappe 4: OAuth + MCP ────────────────────────────────────────
+
+    def _read_body(self, limit=1024 * 1024):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length > limit:
+            raise ValueError("Anfrage zu groß")
+        return self.rfile.read(length) if length else b""
+
+    def _json_cors(self, code, obj, extra=None):
+        h = dict(CORS)
+        h["Cache-Control"] = "no-store"
+        h.update(extra or {})
+        self._send(code, "application/json", json.dumps(obj, ensure_ascii=False).encode("utf-8"), h)
+
+    def _html(self, code, page):
+        self._send(code, "text/html; charset=utf-8", page.encode("utf-8"),
+                   {"Cache-Control": "no-store", "X-Frame-Options": "DENY",
+                    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
+                                               "form-action 'self' https://claude.ai https://claude.com "
+                                               "http://localhost:* http://127.0.0.1:*"})
+
+    def _redirect(self, url):
+        self._send(302, "text/plain", b"", {"Location": url, "Cache-Control": "no-store"})
+
+    def _oauth_mcp(self, method):
+        """Öffentliche OAuth-/MCP-Pfade. Gibt True zurück, wenn behandelt."""
+        p = urllib.parse.urlsplit(self.path).path
+        if p not in OAUTH_PUBLIC:
+            return False
+        try:
+            if method == "OPTIONS":
+                self._send(204, "text/plain", b"", CORS)
+            elif p.startswith("/.well-known/oauth-protected-resource") and method == "GET":
+                self._json_cors(200, oauth.protected_resource_metadata(PUBLIC_URL))
+            elif p.startswith("/.well-known/oauth-authorization-server") and method == "GET":
+                self._json_cors(200, oauth.authorization_server_metadata(PUBLIC_URL))
+            elif p == "/oauth/register" and method == "POST":
+                self._json_cors(201, oauth.register(DB_PATH, json.loads(self._read_body(64 * 1024) or b"{}")))
+            elif p == "/oauth/token" and method == "POST":
+                raw = self._read_body(64 * 1024).decode("utf-8")
+                if "json" in (self.headers.get("Content-Type") or ""):
+                    form = {k: str(v) for k, v in json.loads(raw or "{}").items()}
+                else:
+                    form = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+                self._json_cors(200, oauth.token(DB_PATH, form))
+            elif p == "/mcp" and method == "POST":
+                if not oauth.check_bearer(DB_PATH, self.headers.get("Authorization", "")):
+                    meta = PUBLIC_URL + "/.well-known/oauth-protected-resource"
+                    self._json_cors(401, {"error": "invalid_token"},
+                                    {"WWW-Authenticate": 'Bearer resource_metadata="%s"' % meta})
+                    return True
+                try:
+                    payload = json.loads(self._read_body(2 * 1024 * 1024) or b"null")
+                except ValueError:
+                    self._json_cors(400, {"jsonrpc": "2.0", "id": None,
+                                          "error": {"code": -32700, "message": "Ungültiges JSON"}})
+                    return True
+                res = mcp_server.handle_body(McpContext(), payload)
+                if res is None:
+                    self._send(202, "text/plain", b"", CORS)
+                else:
+                    self._json_cors(200, res)
+            elif p == "/mcp":
+                self._send(405, "text/plain", b"method not allowed", dict(CORS, Allow="POST"))
+            else:
+                self._send(405, "text/plain", b"method not allowed", CORS)
+        except oauth.OAuthError as e:
+            self._json_cors(e.status, e.body())
+        except ValueError as e:
+            self._json_cors(400, {"error": "invalid_request", "error_description": str(e)})
+        except Exception as e:  # noqa: BLE001
+            self._json_cors(500, {"error": "server_error", "error_description": str(e)})
+        return True
+
+    def _authorize(self, method):
+        """/oauth/authorize – liegt hinter der normalen Cockpit-Anmeldung (Basic-Auth)."""
+        try:
+            if method == "GET":
+                qs = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).items()}
+                try:
+                    params, name = oauth.check_authorize(DB_PATH, PUBLIC_URL, qs)
+                except oauth.OAuthError as e:
+                    # Client und Adresse sind geprüft – Fehler an Claude zurückmelden
+                    params = {"redirect_uri": qs.get("redirect_uri"), "state": qs.get("state", "")}
+                    self._redirect(oauth.error_redirect(params, e))
+                    return
+                self._html(200, oauth.consent_page(params, name))
+            else:
+                form = {k: v[0] for k, v in urllib.parse.parse_qs(self._read_body(16 * 1024).decode()).items()}
+                self._redirect(oauth.decide(DB_PATH, form))
+        except oauth.PageError as e:
+            self._html(400, oauth.ERROR_PAGE % html_escape(str(e)))
+
+    def do_OPTIONS(self):
+        if not self._oauth_mcp("OPTIONS"):
+            self._send(404, "text/plain", b"not found")
 
     def _send(self, code, ctype, data, extra_headers=None):
         self.send_response(code)
@@ -137,6 +264,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # ─── Etappe 3: Bedeutungssuche, Bibliothek, Import ───
             if method == "GET" and p == "/api/semantic":
                 self._json(200, VECTORS.search_text(qs.get("q", "")))
+                return True
+            if method == "GET" and p == "/api/activity":
+                self._json(200, db.recent_activity(DB_PATH, min(int(qs.get("limit", "50")), 500)))
                 return True
             if method == "GET" and p == "/api/status":
                 self._json(200, db.status(DB_PATH))
@@ -319,6 +449,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 left -= len(chunk)
 
     def do_DELETE(self):
+        if self._oauth_mcp("DELETE"):
+            return
         if not self._authorized():
             self._require_auth()
             return
@@ -326,8 +458,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(404, "text/plain", b"not found")
 
     def do_POST(self):
+        if self._oauth_mcp("POST"):
+            return
         if not self._authorized():
             self._require_auth()
+            return
+        if urllib.parse.urlsplit(self.path).path == "/oauth/authorize":
+            self._authorize("POST")
             return
         if self._api("POST"):
             return
@@ -336,7 +473,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = self.rfile.read(length)
             try:
                 state = json.loads(body)
-                db.save_state(DB_PATH, state)
+                new_ts = db.save_state(DB_PATH, state)
+            except db.Conflict:
+                self._json(409, {"conflict": True, "state": db.load_state(DB_PATH)})
+                return
             except db.EmptySaveRefused:
                 self._json(409, {"error": "Leerer Stand abgelehnt (würde alle Karten löschen)"})
                 return
@@ -350,13 +490,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 write_json_mirror()
             except Exception:
                 pass  # Spiegel ist nur Komfort, Datenbank ist maßgeblich
-            self._json(200, {"ok": True})
+            self._json(200, {"ok": True, "_ts": new_ts})
         else:
             self._send(404, "text/plain", b"not found")
 
     def do_GET(self):
+        if self._oauth_mcp("GET"):
+            return
         if self.path not in PUBLIC_PATHS and not self._authorized():
             self._require_auth()
+            return
+        if urllib.parse.urlsplit(self.path).path == "/oauth/authorize":
+            self._authorize("GET")
             return
 
         if self._api("GET"):

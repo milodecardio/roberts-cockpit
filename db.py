@@ -13,12 +13,22 @@ Nur Python-Bordmittel.
 """
 import json
 import os
+import secrets
 import sqlite3
 import threading
 import time
 
 CORE = ("col", "cat", "prio", "t", "note", "src", "sub", "owner")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# Gültige Werte (wie im Frontend: COLS, CATS, PRIOS)
+COLUMNS = {"eingang": "📥 Eingang", "heute": "🔴 Heute / Dringend", "woche": "🟢 Diese Woche",
+           "naechstes": "🔵 Als Nächstes", "spaeter": "🟣 Später", "geparkt": "⚪ Geparkt (Vision)",
+           "erledigt": "✅ Erledigt"}
+CATEGORIES = {"b1": "B1 Beruflich & Projekte", "b2": "B2 Recht & Verwaltung", "b3": "B3 Technik",
+              "b4": "B4 Medizin", "b5": "B5 Pflege Mutter", "b6": "B6 Privates", "b7": "B7 Sonstiges",
+              "b8": "B8 Themen ohne Aufgabe", "vision": "Vision"}
+PRIORITIES = ("Hoch", "Mittel", "Niedrig")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -93,6 +103,38 @@ CREATE TABLE IF NOT EXISTS sources (
     PRIMARY KEY (source, ref)
 );
 CREATE INDEX IF NOT EXISTS sources_doc ON sources (doc_id);
+
+-- Etappe 4: Anmeldung von claude.ai (OAuth) und Protokoll der KI-Änderungen
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id     TEXT PRIMARY KEY,
+    name          TEXT,
+    redirect_uris TEXT NOT NULL,
+    created_at    REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_codes (
+    code_hash    TEXT PRIMARY KEY,
+    client_id    TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    challenge    TEXT NOT NULL,
+    expires_at   REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL CHECK (kind IN ('access', 'refresh')),
+    client_id  TEXT NOT NULL,
+    grant_id   TEXT NOT NULL,
+    expires_at REAL NOT NULL,
+    created_at REAL NOT NULL,
+    last_used  REAL
+);
+CREATE INDEX IF NOT EXISTS oauth_tokens_grant ON oauth_tokens (grant_id);
+CREATE TABLE IF NOT EXISTS activity (
+    id     INTEGER PRIMARY KEY,
+    ts     REAL NOT NULL,
+    actor  TEXT NOT NULL,
+    action TEXT NOT NULL,
+    detail TEXT
+);
 """
 
 # Spalten, die nach Version 2 dazugekommen sind (ALTER TABLE ist nicht „IF NOT EXISTS“-fähig)
@@ -118,6 +160,10 @@ _write_lock = threading.Lock()
 
 class EmptySaveRefused(Exception):
     """Ein Speichern ohne Karten würde alles als gelöscht markieren."""
+
+
+class Conflict(Exception):
+    """Der Stand wurde inzwischen woanders geändert (anderes Gerät oder Claude)."""
 
 
 def _connect(path):
@@ -193,9 +239,31 @@ def validate(state):
         seen.add(c["id"])
 
 
+def _get_ts(conn):
+    row = conn.execute("SELECT value FROM meta WHERE key='_ts'").fetchone()
+    try:
+        return json.loads(row["value"]) if row else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _next_ts(conn):
+    """Neue Versionsnummer des Kartenstands (Millisekunden, streng steigend)."""
+    ts = max(int(time.time() * 1000), int(float(_get_ts(conn) or 0)) + 1)
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('_ts', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(ts),))
+    return ts
+
+
 def save_state(path, state):
-    """Übernimmt den kompletten Stand aus dem Frontend (wie bisher die JSON-Datei)."""
+    """Übernimmt den kompletten Stand aus dem Frontend (wie bisher die JSON-Datei).
+
+    Schickt das Frontend `_base` mit (die Version, auf der seine Änderung beruht), wird
+    abgelehnt (Conflict), falls inzwischen jemand anderes gespeichert hat – das Frontend
+    führt dann zusammen und speichert erneut. Gibt die neue Version zurück."""
     validate(state)
+    base = state.get("_base")
     now = time.time()
     rows = []
     for pos, c in enumerate(state["cards"]):
@@ -215,6 +283,8 @@ def save_state(path, state):
             if not rows and alive > 0:
                 raise EmptySaveRefused()
             conn.execute("BEGIN IMMEDIATE")
+            if base is not None and float(base or 0) != float(_get_ts(conn) or 0):
+                raise Conflict()
             conn.executemany(
                 """INSERT INTO cards (id, pos, %s, extra, created_at, updated_at)
                    VALUES (?, ?, %s, ?, ?, ?)
@@ -241,13 +311,10 @@ def save_state(path, state):
                 "WHERE deleted_at IS NULL AND id NOT IN (SELECT id FROM incoming)",
                 (now,),
             )
-            conn.execute(
-                "INSERT INTO meta (key, value) VALUES ('_ts', ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (json.dumps(state.get("_ts", 0)),),
-            )
+            new_ts = _next_ts(conn)
             _reindex_cards(conn)
             conn.commit()
+            return new_ts
         except Exception:
             conn.rollback()
             raise
@@ -518,9 +585,15 @@ def attach_doc(path, card_id, doc_id):
 
 # ─── Bibliothek & Import (Etappe 3) ───────────────────────────────────
 
-def library(path, q="", origin="", status="", limit=100, offset=0):
+def library(path, q="", origin="", status="", limit=100, offset=0, folder="", unlinked=False):
     where = ["d.deleted_at IS NULL"]
     args = []
+    if folder:
+        where.append("instr(lower(coalesce(d.origin_path, '')), lower(?)) > 0")
+        args.append(folder)
+    if unlinked:
+        where.append("NOT EXISTS (SELECT 1 FROM card_documents cd JOIN cards c ON c.id = cd.card_id "
+                     "WHERE cd.doc_id = d.id AND c.deleted_at IS NULL)")
     if origin:
         where.append("d.origin = ?")
         args.append(origin)
@@ -769,3 +842,215 @@ def card_vector(path, card_id):
         return r["embedding"] if r else None
     finally:
         conn.close()
+
+
+# ─── Karten einzeln bearbeiten (Etappe 4: Claude) ─────────────────────
+
+def _row_to_card(r):
+    card = {"id": r["id"]}
+    for k in CORE:
+        if r[k] is not None:
+            card[k] = r[k]
+    card.update(json.loads(r["extra"] or "{}"))
+    card["created_at"] = r["created_at"]
+    card["updated_at"] = r["updated_at"]
+    return card
+
+
+def _check_fields(f):
+    if "col" in f and f["col"] not in COLUMNS:
+        raise ValueError("Unbekannte Spalte '%s'. Erlaubt: %s" % (f["col"], ", ".join(COLUMNS)))
+    if "cat" in f and f["cat"] not in CATEGORIES:
+        raise ValueError("Unbekannte Kategorie '%s'. Erlaubt: %s" % (f["cat"], ", ".join(CATEGORIES)))
+    if "prio" in f and f["prio"] not in PRIORITIES:
+        raise ValueError("Unbekannte Priorität '%s'. Erlaubt: %s" % (f["prio"], ", ".join(PRIORITIES)))
+    for k, v in f.items():
+        if k not in CORE:
+            raise ValueError("Unbekanntes Feld: %s" % k)
+        if not isinstance(v, str):
+            raise ValueError("Feld %s muss Text sein" % k)
+        if len(v) > 20000:
+            raise ValueError("Feld %s ist zu lang" % k)
+
+
+def log_activity(conn, actor, action, detail):
+    conn.execute("INSERT INTO activity (ts, actor, action, detail) VALUES (?, ?, ?, ?)",
+                 (time.time(), actor, action, json.dumps(detail, ensure_ascii=False)))
+
+
+def log(path, actor, action, detail):
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            log_activity(conn, actor, action, detail)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_card(path, card_id):
+    conn = _connect(path)
+    try:
+        r = conn.execute("SELECT * FROM cards WHERE id = ? AND deleted_at IS NULL", (card_id,)).fetchone()
+    finally:
+        conn.close()
+    if not r:
+        raise NotFound("Karte '%s' nicht gefunden" % card_id)
+    return _row_to_card(r)
+
+
+def list_cards(path):
+    conn = _connect(path)
+    try:
+        return [_row_to_card(r) for r in conn.execute(
+            "SELECT * FROM cards WHERE deleted_at IS NULL ORDER BY pos")]
+    finally:
+        conn.close()
+
+
+def create_card(path, fields, actor="claude"):
+    f = {"col": "eingang", "prio": "Mittel", "owner": "Robert", "sub": "", "note": "", "src": ""}
+    f.update({k: v for k, v in fields.items() if v is not None})
+    if not (f.get("t") or "").strip():
+        raise ValueError("Titel fehlt")
+    if not f.get("cat"):
+        raise ValueError("Kategorie fehlt")
+    _check_fields(f)
+    now = time.time()
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            while True:
+                cid = "c" + secrets.token_hex(4)
+                if not conn.execute("SELECT 1 FROM cards WHERE id = ?", (cid,)).fetchone():
+                    break
+            pos = conn.execute("SELECT coalesce(max(pos), -1) + 1 FROM cards").fetchone()[0]
+            conn.execute(
+                "INSERT INTO cards (id, pos, %s, extra, created_at, updated_at) VALUES (?, ?, %s, ?, ?, ?)"
+                % (", ".join(CORE), ", ".join("?" for _ in CORE)),
+                (cid, pos) + tuple(f.get(k) for k in CORE) + (json.dumps({"tools": []}), now, now))
+            _next_ts(conn)
+            _reindex_cards(conn)
+            log_activity(conn, actor, "karte_anlegen", {"id": cid, "t": f["t"]})
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    return get_card(path, cid)
+
+
+def update_card(path, card_id, changes, note_append=None, actor="claude"):
+    changes = {k: v for k, v in changes.items() if v is not None}
+    _check_fields(changes)
+    if not changes and not note_append:
+        raise ValueError("Keine Änderung angegeben")
+    now = time.time()
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            r = conn.execute("SELECT * FROM cards WHERE id = ? AND deleted_at IS NULL", (card_id,)).fetchone()
+            if not r:
+                raise NotFound("Karte '%s' nicht gefunden" % card_id)
+            if note_append:
+                old = changes.get("note", r["note"] or "")
+                changes["note"] = (old.rstrip() + "\n\n" if old.strip() else "") + note_append.strip()
+            before = {k: r[k] for k in changes}
+            sets = ", ".join("%s = ?" % k for k in changes)
+            conn.execute("UPDATE cards SET %s, updated_at = ? WHERE id = ?" % sets,
+                         tuple(changes.values()) + (now, card_id))
+            _next_ts(conn)
+            _reindex_cards(conn)
+            log_activity(conn, actor, "karte_aendern", {"id": card_id, "vorher": before, "nachher": changes})
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    return get_card(path, card_id)
+
+
+def get_doc(path, doc_id):
+    """Material mit ausgelesenem Text und verknüpften Karten."""
+    conn = _connect(path)
+    try:
+        d = conn.execute("SELECT d.*, t.text AS fulltext FROM documents d "
+                         "LEFT JOIN doc_text t ON t.doc_id = d.id "
+                         "WHERE d.id = ? AND d.deleted_at IS NULL", (doc_id,)).fetchone()
+        if not d:
+            raise NotFound("Dokument %s nicht gefunden" % doc_id)
+        item = _doc_dict(d)
+        item["sha256"] = d["sha256"]
+        item["text"] = d["fulltext"]
+        item["cards"] = [dict(id=x["id"], t=x["t"]) for x in conn.execute(
+            "SELECT c.id, c.t FROM card_documents cd JOIN cards c ON c.id = cd.card_id "
+            "WHERE cd.doc_id = ? AND c.deleted_at IS NULL", (doc_id,))]
+        return item
+    finally:
+        conn.close()
+
+
+def recent_activity(path, limit=50):
+    conn = _connect(path)
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT ts, actor, action, detail FROM activity ORDER BY id DESC LIMIT ?", (limit,))]
+    finally:
+        conn.close()
+
+
+# ─── OAuth-Speicher (Etappe 4) ────────────────────────────────────────
+
+def oauth_exec(path, sql, args=()):
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            cur = conn.execute(sql, args)
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+
+def oauth_query(path, sql, args=()):
+    conn = _connect(path)
+    try:
+        return [dict(r) for r in conn.execute(sql, args)]
+    finally:
+        conn.close()
+
+
+def oauth_take_code(path, code_hash):
+    """Code holen und sofort löschen (nur einmal verwendbar)."""
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            r = conn.execute("SELECT * FROM oauth_codes WHERE code_hash = ?", (code_hash,)).fetchone()
+            conn.execute("DELETE FROM oauth_codes WHERE code_hash = ? OR expires_at < ?",
+                         (code_hash, time.time()))
+            conn.commit()
+            return dict(r) if r else None
+        finally:
+            conn.close()
+
+
+def oauth_take_refresh(path, token_hash):
+    """Refresh-Token einlösen: gültig → löschen und Daten zurückgeben (Rotation)."""
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            r = conn.execute("SELECT * FROM oauth_tokens WHERE token_hash = ? AND kind = 'refresh'",
+                             (token_hash,)).fetchone()
+            if r:
+                conn.execute("DELETE FROM oauth_tokens WHERE token_hash = ?", (token_hash,))
+            conn.execute("DELETE FROM oauth_tokens WHERE expires_at < ?", (time.time(),))
+            conn.commit()
+            return dict(r) if r else None
+        finally:
+            conn.close()

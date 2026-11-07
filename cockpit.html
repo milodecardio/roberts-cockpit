@@ -215,11 +215,52 @@ function loadLocal(){
   return {cards:structuredClone(SEED),_ts:0};
 }
 
+// Speichern mit Konfliktschutz: _ts = Server-Version, auf der unser Stand beruht.
+// Hat inzwischen ein anderes Gerät oder Claude gespeichert, antwortet der Server 409
+// mit seinem Stand; wir führen feldweise zusammen (eigene Änderungen gewinnen) und speichern erneut.
+let _base={};            // id → JSON der Karte im zuletzt bestätigten Server-Stand
+let _saving=false,_dirty=false;
+function snapBase(cards){_base={};(cards||[]).forEach(c=>{_base[c.id]=JSON.stringify(c);});}
+function keepLocal(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}}
+
 function save(){
-  _ts=Date.now();
   state._ts=_ts;
-  localStorage.setItem(KEY,JSON.stringify(state));
-  fetch('/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}).catch(()=>{});
+  keepLocal();
+  _dirty=true;flush();
+}
+async function flush(){
+  if(_saving||!_dirty)return;
+  _saving=true;_dirty=false;
+  const sent=state.cards.map(c=>({...c}));
+  let again=false;
+  try{
+    const r=await fetch('/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cards:sent,_base:_ts})});
+    const d=await r.json().catch(()=>({}));
+    if(r.ok){_ts=d._ts||_ts;state._ts=_ts;snapBase(sent);keepLocal();again=_dirty;}
+    else if(r.status===409&&d.conflict&&d.state){
+      const srv=migrate(d.state);
+      state=mergeStates(srv);_ts=srv._ts||0;state._ts=_ts;snapBase(srv.cards);keepLocal();
+      _dirty=true;again=true;render();toast('🔄 Mit Änderungen von Claude/anderem Gerät zusammengeführt');
+    } else {_dirty=true;toast('⚠️ Speichern fehlgeschlagen: '+(d.error||r.status));}
+  }catch(e){_dirty=true;}   // offline: nächster Abgleich versucht es erneut
+  finally{_saving=false;}
+  if(again)flush();
+}
+function mergeStates(srv){
+  const srvMap=new Map(srv.cards.map(c=>[c.id,c])),localIds=new Set(state.cards.map(c=>c.id)),out=[];
+  for(const c of state.cards){
+    const b=_base[c.id],sc=srvMap.get(c.id);
+    if(b===undefined){out.push(c);continue;}                 // lokal neu angelegt
+    if(JSON.stringify(c)===b){if(sc)out.push(sc);continue;}   // lokal unverändert → Server-Stand
+    if(!sc){out.push(c);continue;}                           // lokal geändert, woanders gelöscht → behalten
+    const bo=JSON.parse(b),m={...sc};                        // beide geändert → feldweise
+    for(const k of new Set([...Object.keys(c),...Object.keys(bo)])){
+      if(JSON.stringify(c[k])!==JSON.stringify(bo[k])){if(c[k]===undefined)delete m[k];else m[k]=c[k];}
+    }
+    out.push(m);
+  }
+  for(const sc of srv.cards)if(!localIds.has(sc.id)&&_base[sc.id]===undefined)out.push(sc); // woanders neu
+  return {cards:out,_ts:srv._ts};
 }
 
 function migrate(s){
@@ -230,7 +271,7 @@ function migrate(s){
 async function initState(){
   try{
     const r=await fetch('/state');
-    if(r.ok){const d=await r.json();if(d&&d.cards){const m=migrate(d);state=m;_ts=m._ts||0;localStorage.setItem(KEY,JSON.stringify(state));render();}}
+    if(r.ok){const d=await r.json();if(d&&d.cards){const m=migrate(d);state=m;_ts=m._ts||0;snapBase(m.cards);keepLocal();render();}}
   }catch(e){}
 }
 
@@ -239,13 +280,14 @@ function startPoll(){
   if(_poll)return;
   _poll=setInterval(async()=>{
     try{
+      if(_dirty&&!_saving){flush();return;}   // nach Offline-Phase nachholen
+      if(_saving)return;
       const r=await fetch('/state');
-      if(r.ok){
+      if(r.ok&&!_saving&&!_dirty){
         const d=await r.json();
-        if(d&&d.cards&&(d._ts||0)>_ts+1000){
-          state=d;_ts=d._ts||0;
-          localStorage.setItem(KEY,JSON.stringify(state));
-          render();toast('🔄 Aktualisiert vom Server');
+        if(d&&d.cards&&(d._ts||0)!==_ts){
+          state=migrate(d);_ts=d._ts||0;snapBase(state.cards);keepLocal();
+          render();loadDocCounts();toast('🔄 Aktualisiert vom Server');
         }
       }
     }catch(e){}
@@ -736,6 +778,7 @@ window.onerror=function(msg,src,line,col,err){
 try{
   state=loadLocal();
   _ts=state._ts||0;
+  snapBase(state.cards);
   renderNav();
   render();
 }catch(e){
