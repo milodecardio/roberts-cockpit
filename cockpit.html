@@ -95,6 +95,35 @@
   .banner{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--acc2);border-radius:12px;padding:12px 15px;margin-bottom:14px;font-size:13.5px}
   #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--acc);color:var(--txt);padding:10px 16px;border-radius:10px;font-size:13.5px;opacity:0;transition:.25s;pointer-events:none;z-index:200}
   #toast.show{opacity:1}
+  /* Materialien (Etappe 2) */
+  .card .att{font-size:10.5px;color:var(--acc);font-weight:600}
+  .docs{margin-top:16px;border-top:1px solid var(--line);padding-top:10px}
+  .docs h4{margin:0 0 8px;font-size:13px;color:var(--mut);font-weight:600;display:flex;align-items:center;gap:8px}
+  .docs .hint{font-size:12px;color:var(--mut)}
+  .doc{display:flex;align-items:flex-start;gap:9px;padding:7px 8px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px;background:var(--panel2)}
+  .doc .ic{font-size:17px;line-height:1.2}
+  .doc .bd{flex:1;min-width:0}
+  .doc .bd a{color:var(--txt);text-decoration:none;font-weight:600;font-size:13px;word-break:break-word}
+  .doc .bd a:hover{color:var(--acc)}
+  .doc .bd .m{font-size:11px;color:var(--mut);overflow-wrap:anywhere}
+  .modal{min-width:0;overflow-wrap:anywhere}
+  .doc .bd .nb{font-size:12.5px;white-space:pre-wrap;margin-top:3px;max-height:7.5em;overflow:auto}
+  .doc img.th{max-width:120px;max-height:80px;border-radius:6px;display:block;margin-top:5px}
+  .doc .x{background:none;border:none;color:var(--mut);cursor:pointer;font-size:15px;padding:0 3px}
+  .doc .x:hover{color:var(--steuer)}
+  .doc-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .doc-form{margin-top:8px;padding:9px;border:1px dashed var(--line);border-radius:9px}
+  .docs.dropping{outline:2px dashed var(--acc);outline-offset:4px;border-radius:8px}
+  .up{font-size:12px;color:var(--mut);margin:4px 0}
+  .up progress{width:100%;height:6px}
+  .hits{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:12px;padding:10px 14px;margin-bottom:14px}
+  .hits h4{margin:0 0 6px;font-size:13px;color:var(--mut)}
+  .hit{font-size:13px;padding:4px 0;border-top:1px solid var(--line)}
+  .hit:first-of-type{border-top:none}
+  .hit a{color:var(--txt);font-weight:600;text-decoration:none}
+  .hit .s{color:var(--mut);font-size:12px}
+  .hit mark{background:rgba(110,168,254,.3);color:var(--txt);border-radius:3px;padding:0 1px}
+  .hit .cl{color:var(--acc);cursor:pointer;font-size:12px}
   @media(max-width:760px){.grid2,.frow{grid-template-columns:1fr}}
 </style>
 </head>
@@ -223,7 +252,7 @@ function renderFilters(){
   f.style.display="flex";
   let html=`<span class="chip ${filterCat==='alle'?'active':''}" onclick="setFilter('alle')">Alle</span>`;
   for(const k in CATS) html+=`<span class="chip ${filterCat===k?'active':''}" onclick="setFilter('${k}')"><span class="d" style="background:${CATS[k][1]}"></span>${CATS[k][0]}</span>`;
-  html+=`<input id="search" placeholder="🔍 suchen…" value="${esc(searchQ)}" oninput="searchQ=this.value;render()">`;
+  html+=`<input id="search" placeholder="🔍 Karten & Materialien suchen…" value="${esc(searchQ)}" oninput="searchQ=this.value;render();serverSearch()">`;
   const subs=[...new Set(state.cards.filter(c=>c.cat===filterCat&&c.sub).map(c=>c.sub))].sort((a,b)=>a.localeCompare(b,"de",{numeric:true}));
   if(subs.length){
     html+=`<div class="subfilters"><span class="chip ${filterSub==='alle'?'active':''}" onclick="setSub('alle')">Alle Unterthemen</span>`;
@@ -244,13 +273,47 @@ function render(){
 function visible(c){
   if(filterCat!=="alle"&&c.cat!==filterCat)return false;
   if(filterSub!=="alle"&&c.sub!==filterSub)return false;
-  if(searchQ){const q=searchQ.toLowerCase();return(c.t+" "+(c.note||"")+" "+(c.src||"")+" "+(c.sub||"")+" "+(c.owner||"")).toLowerCase().includes(q);}
+  if(searchQ){
+    if(srv.q===searchQ.trim()&&srv.cards.has(c.id))return true; // Treffer über Materialien/Server-Suche
+    const q=searchQ.toLowerCase();return(c.t+" "+(c.note||"")+" "+(c.src||"")+" "+(c.sub||"")+" "+(c.owner||"")).toLowerCase().includes(q);
+  }
   return true;
+}
+
+// ─── Server-Suche & Materialien (Etappe 2) ───────────────
+let srv={q:"",cards:new Set(),docs:[]},_srvT=null,docCounts={};
+function serverSearch(){
+  clearTimeout(_srvT);
+  const q=searchQ.trim();
+  if(!q){srv={q:"",cards:new Set(),docs:[]};return;}
+  _srvT=setTimeout(async()=>{
+    try{
+      const r=await fetch('/api/search?q='+encodeURIComponent(q));
+      if(!r.ok)return;
+      const d=await r.json();
+      if(searchQ.trim()!==q)return;
+      srv={q,cards:new Set(d.cards),docs:d.docs};
+      render();
+    }catch(e){}
+  },300);
+}
+async function loadDocCounts(){
+  try{const r=await fetch('/api/doc-counts');if(r.ok){docCounts=await r.json();if(activeView==="board")render();}}catch(e){}
+}
+function hitsHTML(){
+  if(!searchQ.trim()||srv.q!==searchQ.trim()||!srv.docs.length)return"";
+  const mark=s=>esc(s||"").replace(/\u0002/g,"<mark>").replace(/\u0003/g,"</mark>");
+  return `<div class="hits"><h4>📎 Treffer in Materialien (${srv.docs.length})</h4>${srv.docs.map(d=>{
+    const cards=d.cards.map(id=>state.cards.find(c=>c.id===id)).filter(Boolean);
+    return `<div class="hit">${DOC_IC[d.kind]||"📄"} ${docLink(d)}
+      ${d.snippet?`<div class="s">${mark(d.snippet)}</div>`:""}
+      <div>${cards.map(c=>`<span class="cl" onclick="editCard('${c.id}')">→ ${esc(c.t)}</span>`).join(" · ")}</div></div>`;
+  }).join("")}</div>`;
 }
 
 // ─── Board ───────────────────────────────────────────────
 function renderBoard(){
-  let html=`<div class="banner">Neue Aufgaben landen im <b>📥 Eingang</b> – von dort per Drag&Drop einsortieren. Bereich wählen, dann nach <b>Unterthema</b> filtern. Karten mit Tool-Bezug haben einen <b>▶-Button</b>. <b>⇅ Prio / ⇅ Kat</b> sortiert die Spalte. Karten per Drag&Drop zwischen und <em>innerhalb</em> von Spalten verschieben.</div><div class="board">`;
+  let html=`<div class="banner">Neue Aufgaben landen im <b>📥 Eingang</b> – von dort per Drag&Drop einsortieren. Bereich wählen, dann nach <b>Unterthema</b> filtern. <b>⇅ Prio / ⇅ Kat</b> sortiert die Spalte. Karte anklicken → unten <b>📎 Materialien</b>: Dateien, Fotos, Links und Notizen anhängen. Die Suche findet auch Inhalte in Materialien.</div>${hitsHTML()}<div class="board">`;
   for(const [id,label] of COLS){
     const cards=state.cards.filter(c=>c.col===id&&visible(c));
     html+=`<div class="col ${id}"
@@ -281,7 +344,7 @@ function cardHTML(c){
     ondrop="onDropCard(event,'${c.id}')"
     onclick="editCard('${c.id}')">
     <div class="t">${esc(c.t)}</div>
-    <div class="meta"><span class="tag" style="background:${hexa(cat[1])};color:${cat[1]}">${cat[0]}</span><span class="prio ${c.prio}">${c.prio}</span>${c.owner&&c.owner!=="Robert"?`<span class="owner">👤 ${esc(c.owner)}</span>`:""}</div>
+    <div class="meta"><span class="tag" style="background:${hexa(cat[1])};color:${cat[1]}">${cat[0]}</span><span class="prio ${c.prio}">${c.prio}</span>${c.owner&&c.owner!=="Robert"?`<span class="owner">👤 ${esc(c.owner)}</span>`:""}${docCounts[c.id]?`<span class="att">📎 ${docCounts[c.id]}</span>`:""}</div>
     ${c.sub?`<div class="sub-t">${esc(c.sub)}</div>`:""}
     ${c.note?`<div class="note">${esc(c.note)}</div>`:""}
     ${c.src?`<div class="src">${esc(c.src)}</div>`:""}
@@ -374,10 +437,117 @@ function editCard(id,col){
     <div class="grid2"><div><label>Unterthema</label><input id="m_sub" list="m_subs" value="${esc(c.sub||'')}"><datalist id="m_subs">${subOpts}</datalist></div>
     <div><label>Zuständig</label><input id="m_owner" value="${esc(c.owner||'')}"></div></div>
     <label>Quelle</label><input id="m_src" value="${esc(c.src||'')}">
+    <div class="docs" id="docs"
+      ondragover="event.preventDefault();this.classList.add('dropping')"
+      ondragleave="this.classList.remove('dropping')"
+      ondrop="event.preventDefault();this.classList.remove('dropping');${id?`uploadFiles('${c.id}',event.dataTransfer.files)`:""}">
+      <h4>📎 Materialien</h4>
+      ${id?`<div id="docList"><div class="hint">lädt…</div></div><div id="upl"></div>
+      <div class="doc-actions">
+        <button class="btn sm" onclick="pickFiles('${c.id}',false)">📄 Datei</button>
+        <button class="btn sm" onclick="pickFiles('${c.id}',true)">📷 Foto/Scan</button>
+        <button class="btn sm" onclick="docForm('${c.id}','link')">🔗 Link</button>
+        <button class="btn sm" onclick="docForm('${c.id}','note')">📝 Notiz</button>
+      </div><div id="docForm"></div>
+      <div class="hint" style="margin-top:6px">Materialien werden sofort gespeichert. Dateien auch per Drag&Drop hierher ziehen.</div>`
+      :`<div class="hint">Erst <b>Speichern</b>, dann können Materialien angehängt werden.</div>`}
+    </div>
     <div class="modal-actions">${id?`<button class="btn" style="margin-right:auto;color:var(--steuer)" onclick="delCard('${c.id}')">Löschen</button>`:""}
       <button class="btn" onclick="closeM()">Abbrechen</button>
       <button class="btn primary" onclick="saveCard('${c.id}',${!!id})">Speichern</button></div>`;
   M.classList.add("open");
+  if(id)loadDocs(c.id);
+}
+
+const DOC_IC={file:"📄",link:"🔗",note:"📝"};
+function fileIcon(m){m=m||"";return m.startsWith("image/")?"🖼":m.startsWith("audio/")?"🎧":m.startsWith("video/")?"🎬":m==="application/pdf"?"📕":/sheet|excel|csv/.test(m)?"📊":/word|document/.test(m)?"📘":"📄";}
+function fmtSize(n){if(n==null)return"";return n<1024?n+" B":n<1048576?(n/1024).toFixed(0)+" KB":(n/1048576).toFixed(1)+" MB";}
+function noteRest(d){const b=d.body||"";return b.startsWith(d.title)?b.slice(d.title.length).trim():b;}
+function docHref(d){return d.kind==="file"?`/files/${d.id}/${encodeURIComponent(d.filename||"datei")}`:d.kind==="link"?d.url:"";}
+function docLink(d){
+  const h=docHref(d);
+  return h?`<a href="${esc(h)}" target="_blank" rel="noopener noreferrer">${esc(d.title||d.filename||d.url)}</a>`:`<b>${esc(d.title)}</b>`;
+}
+async function loadDocs(cid){
+  const el=document.getElementById("docList");if(!el)return;
+  try{
+    const r=await fetch(`/api/cards/${encodeURIComponent(cid)}/docs`);
+    if(r.status===404){el.innerHTML=`<div class="hint">Noch keine Materialien.</div>`;return;}
+    const docs=await r.json();
+    docCounts[cid]=docs.length;if(!docs.length)delete docCounts[cid];
+    if(!document.getElementById("docList"))return;
+    el.innerHTML=docs.length?docs.map(d=>`<div class="doc">
+      <span class="ic">${d.kind==="file"?fileIcon(d.mime):DOC_IC[d.kind]}</span>
+      <div class="bd">${docLink(d)}
+        <div class="m">${d.kind==="file"?esc(d.filename)+" · "+fmtSize(d.size)+" · ":d.kind==="link"?esc(d.url)+" · ":""}${new Date(d.created_at*1000).toLocaleDateString("de-DE")}</div>
+        ${d.kind==="note"&&noteRest(d)?`<div class="nb">${esc(noteRest(d))}</div>`:""}
+        ${d.kind==="file"&&/^image\/(png|jpeg|gif|webp)$/.test(d.mime||"")?`<a href="${esc(docHref(d))}" target="_blank"><img class="th" loading="lazy" src="${esc(docHref(d))}" alt=""></a>`:""}
+      </div>
+      <button class="x" title="Von dieser Karte lösen" onclick="unlinkDoc('${cid}',${d.id})">✕</button></div>`).join("")
+      :`<div class="hint">Noch keine Materialien.</div>`;
+  }catch(e){el.innerHTML=`<div class="hint">Materialien konnten nicht geladen werden (offline?).</div>`;}
+}
+function pickFiles(cid,camera){
+  const i=document.createElement("input");i.type="file";i.multiple=!camera;
+  if(camera){i.accept="image/*";i.capture="environment";}
+  i.onchange=()=>uploadFiles(cid,i.files);i.click();
+}
+function uploadOne(cid,f,row){
+  return new Promise(res=>{
+    const x=new XMLHttpRequest();
+    x.open("POST",`/api/cards/${encodeURIComponent(cid)}/files`);
+    x.setRequestHeader("X-Filename",encodeURIComponent(f.name||"foto.jpg"));
+    x.setRequestHeader("Content-Type",f.type||"application/octet-stream");
+    x.upload.onprogress=e=>{if(e.lengthComputable)row.querySelector("progress").value=e.loaded/e.total;};
+    x.onload=()=>{let m="";try{m=JSON.parse(x.responseText).error||"";}catch(e){}
+      if(x.status===200)row.remove();else row.innerHTML=`⚠️ ${esc(f.name)}: ${esc(m||"Fehler "+x.status)}`;res(x.status===200);};
+    x.onerror=()=>{row.innerHTML=`⚠️ ${esc(f.name)}: Verbindung unterbrochen`;res(false);};
+    x.send(f);
+  });
+}
+async function uploadFiles(cid,files){
+  const box=document.getElementById("upl");if(!box||!files||!files.length)return;
+  let ok=0;
+  for(const f of Array.from(files)){
+    const row=document.createElement("div");row.className="up";
+    row.innerHTML=`⬆︎ ${esc(f.name)} (${fmtSize(f.size)})<progress max="1" value="0"></progress>`;
+    box.appendChild(row);
+    if(await uploadOne(cid,f,row))ok++;
+  }
+  if(ok)toast(`📎 ${ok} Datei${ok>1?"en":""} angehängt`);
+  loadDocs(cid).then(()=>{if(activeView==="board")render();});
+}
+function docForm(cid,kind){
+  const el=document.getElementById("docForm");
+  el.innerHTML=kind==="link"
+    ?`<div class="doc-form"><label>Adresse (URL)</label><input id="df_url" placeholder="https://…">
+       <label>Bezeichnung (optional)</label><input id="df_title">
+       <div class="modal-actions" style="margin-top:8px"><button class="btn sm" onclick="docForm()">Abbrechen</button><button class="btn sm primary" onclick="addDoc('${cid}','link')">Link anhängen</button></div></div>`
+    :kind==="note"
+    ?`<div class="doc-form"><label>Titel (optional)</label><input id="df_title">
+       <label>Notiz</label><textarea id="df_body" style="min-height:90px"></textarea>
+       <div class="modal-actions" style="margin-top:8px"><button class="btn sm" onclick="docForm()">Abbrechen</button><button class="btn sm primary" onclick="addDoc('${cid}','note')">Notiz anhängen</button></div></div>`
+    :"";
+  const f=el.querySelector("input,textarea");if(f)f.focus();
+}
+async function addDoc(cid,kind){
+  const v=i=>{const e=document.getElementById(i);return e?e.value.trim():"";};
+  const body=kind==="link"?{url:v("df_url"),title:v("df_title")}:{title:v("df_title"),body:v("df_body")};
+  try{
+    const r=await fetch(`/api/cards/${encodeURIComponent(cid)}/${kind}s`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!r.ok){toast("⚠️ "+(d.error||"Fehler"));return;}
+    docForm();toast(kind==="link"?"🔗 Link angehängt":"📝 Notiz angehängt");
+    await loadDocs(cid);if(activeView==="board")render();
+  }catch(e){toast("⚠️ Keine Verbindung zum Server");}
+}
+async function unlinkDoc(cid,docId){
+  if(!confirm("Material von dieser Karte lösen?\n(Es bleibt im Archiv auf dem Server erhalten.)"))return;
+  try{
+    const r=await fetch(`/api/cards/${encodeURIComponent(cid)}/docs/${docId}`,{method:"DELETE"});
+    if(!r.ok){toast("⚠️ Konnte nicht gelöst werden");return;}
+    await loadDocs(cid);if(activeView==="board")render();
+  }catch(e){toast("⚠️ Keine Verbindung zum Server");}
 }
 function saveCard(cid,exists){
   const g=i=>document.getElementById(i).value;
@@ -439,7 +609,7 @@ try{
 }catch(e){
   document.getElementById('view').innerHTML='<div style="padding:20px;color:#ff7a7a;font-family:monospace;font-size:13px;white-space:pre-wrap">INIT-FEHLER: '+e.message+'\n'+e.stack+'</div>';
 }
-initState().then(()=>startPoll());
+initState().then(()=>{startPoll();loadDocCounts();});
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('/service-worker.js').catch(()=>{}));
 }

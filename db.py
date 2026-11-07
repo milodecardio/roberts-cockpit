@@ -18,7 +18,7 @@ import threading
 import time
 
 CORE = ("col", "cat", "prio", "t", "note", "src", "sub", "owner")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -36,6 +36,36 @@ CREATE TABLE IF NOT EXISTS cards (
     deleted_at REAL
 );
 CREATE INDEX IF NOT EXISTS cards_alive ON cards (deleted_at, pos);
+
+-- Etappe 2: Materialien (Dateien, Links, Notizen) und ihre Zuordnung zu Karten
+CREATE TABLE IF NOT EXISTS documents (
+    id         INTEGER PRIMARY KEY,
+    kind       TEXT NOT NULL CHECK (kind IN ('file', 'link', 'note')),
+    title      TEXT NOT NULL DEFAULT '',
+    filename   TEXT,
+    mime       TEXT,
+    size       INTEGER,
+    sha256     TEXT,
+    url        TEXT,
+    body       TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    deleted_at REAL
+);
+CREATE INDEX IF NOT EXISTS documents_sha ON documents (sha256);
+CREATE TABLE IF NOT EXISTS card_documents (
+    card_id    TEXT NOT NULL REFERENCES cards (id),
+    doc_id     INTEGER NOT NULL REFERENCES documents (id),
+    created_at REAL NOT NULL,
+    PRIMARY KEY (card_id, doc_id)
+);
+CREATE INDEX IF NOT EXISTS card_documents_doc ON card_documents (doc_id);
+
+-- Volltextsuche über Karten (kind='card', ref=id) und Materialien (kind='doc', ref=id)
+CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5 (
+    kind UNINDEXED, ref UNINDEXED, title, body,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
 """
 
 _write_lock = threading.Lock()
@@ -60,6 +90,8 @@ def init(path, legacy_json=None):
         conn.executescript(_SCHEMA)
         conn.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
         count = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
+        _reindex_cards(conn)
+        _reindex_docs(conn)
         conn.commit()
     finally:
         conn.close()
@@ -166,9 +198,223 @@ def save_state(path, state):
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (json.dumps(state.get("_ts", 0)),),
             )
+            _reindex_cards(conn)
             conn.commit()
         except Exception:
             conn.rollback()
             raise
         finally:
             conn.close()
+
+
+# ─── Suche ────────────────────────────────────────────────────────────
+
+def _reindex_cards(conn):
+    """Karten-Einträge im Suchindex neu aufbauen (einige hundert Zeilen – schnell)."""
+    conn.execute("DELETE FROM search WHERE kind = 'card'")
+    conn.execute(
+        "INSERT INTO search (kind, ref, title, body) "
+        "SELECT 'card', id, coalesce(t, ''), "
+        "       coalesce(note, '') || ' ' || coalesce(sub, '') || ' ' || "
+        "       coalesce(src, '') || ' ' || coalesce(owner, '') "
+        "FROM cards WHERE deleted_at IS NULL"
+    )
+
+
+def _doc_index_row(d):
+    body = " ".join(x for x in (d["filename"], d["url"], d["body"]) if x)
+    return ("doc", str(d["id"]), d["title"] or "", body)
+
+
+def _reindex_docs(conn):
+    conn.execute("DELETE FROM search WHERE kind = 'doc'")
+    rows = conn.execute("SELECT * FROM documents WHERE deleted_at IS NULL").fetchall()
+    conn.executemany(
+        "INSERT INTO search (kind, ref, title, body) VALUES (?, ?, ?, ?)",
+        [_doc_index_row(d) for d in rows],
+    )
+
+
+def _fts_query(q):
+    """Freitext → FTS5-Abfrage: jedes Wort als Präfix, alle Wörter müssen vorkommen."""
+    words = [w for w in "".join(ch if ch.isalnum() else " " for ch in q).split() if w]
+    return " ".join('"%s"*' % w for w in words[:12])
+
+
+def search(path, q, limit=50):
+    fq = _fts_query(q)
+    if not fq:
+        return {"cards": [], "docs": []}
+    conn = _connect(path)
+    try:
+        hits = conn.execute(
+            "SELECT kind, ref, snippet(search, -1, char(2), char(3), '…', 14) AS snip "
+            "FROM search WHERE search MATCH ? ORDER BY rank LIMIT ?",
+            (fq, limit),
+        ).fetchall()
+        card_ids = {h["ref"] for h in hits if h["kind"] == "card"}
+        docs = []
+        for h in hits:
+            if h["kind"] != "doc":
+                continue
+            d = conn.execute(
+                "SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL", (int(h["ref"]),)
+            ).fetchone()
+            if not d:
+                continue
+            cards = [
+                r["card_id"]
+                for r in conn.execute(
+                    "SELECT cd.card_id FROM card_documents cd JOIN cards c ON c.id = cd.card_id "
+                    "WHERE cd.doc_id = ? AND c.deleted_at IS NULL",
+                    (d["id"],),
+                )
+            ]
+            card_ids.update(cards)
+            item = _doc_dict(d)
+            item["cards"] = cards
+            item["snippet"] = h["snip"]
+            docs.append(item)
+    finally:
+        conn.close()
+    return {"cards": sorted(card_ids), "docs": docs}
+
+
+# ─── Materialien ──────────────────────────────────────────────────────
+
+class NotFound(Exception):
+    pass
+
+
+def _doc_dict(d):
+    return {
+        "id": d["id"], "kind": d["kind"], "title": d["title"], "filename": d["filename"],
+        "mime": d["mime"], "size": d["size"], "url": d["url"], "body": d["body"],
+        "created_at": d["created_at"],
+    }
+
+
+def _require_card(conn, card_id):
+    if not conn.execute(
+        "SELECT 1 FROM cards WHERE id = ? AND deleted_at IS NULL", (card_id,)
+    ).fetchone():
+        raise NotFound("Karte nicht gefunden – bitte die Karte zuerst speichern.")
+
+
+def card_docs(path, card_id):
+    conn = _connect(path)
+    try:
+        rows = conn.execute(
+            "SELECT d.* FROM documents d JOIN card_documents cd ON cd.doc_id = d.id "
+            "WHERE cd.card_id = ? AND d.deleted_at IS NULL ORDER BY cd.created_at",
+            (card_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_doc_dict(d) for d in rows]
+
+
+def doc_counts(path):
+    conn = _connect(path)
+    try:
+        rows = conn.execute(
+            "SELECT cd.card_id, COUNT(*) AS n FROM card_documents cd "
+            "JOIN documents d ON d.id = cd.doc_id "
+            "WHERE d.deleted_at IS NULL GROUP BY cd.card_id"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {r["card_id"]: r["n"] for r in rows}
+
+
+def add_doc(path, card_id, kind, title="", filename=None, mime=None, size=None,
+            sha256=None, url=None, body=None):
+    """Legt ein Material an und hängt es an die Karte.
+    Gleiche Datei (gleicher Hash) wird nicht doppelt gespeichert, sondern wiederverwendet."""
+    now = time.time()
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            _require_card(conn, card_id)
+            existing = None
+            if kind == "file" and sha256:
+                existing = conn.execute(
+                    "SELECT * FROM documents WHERE kind = 'file' AND sha256 = ? "
+                    "ORDER BY deleted_at IS NOT NULL, id LIMIT 1",
+                    (sha256,),
+                ).fetchone()
+            if existing:
+                doc_id = existing["id"]
+                if existing["deleted_at"] is not None:
+                    conn.execute(
+                        "UPDATE documents SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+                        (now, doc_id),
+                    )
+            else:
+                cur = conn.execute(
+                    "INSERT INTO documents (kind, title, filename, mime, size, sha256, url, body, "
+                    "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (kind, title or "", filename, mime, size, sha256, url, body, now, now),
+                )
+                doc_id = cur.lastrowid
+            conn.execute(
+                "INSERT OR IGNORE INTO card_documents (card_id, doc_id, created_at) VALUES (?, ?, ?)",
+                (card_id, doc_id, now),
+            )
+            d = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+            conn.execute("DELETE FROM search WHERE kind = 'doc' AND ref = ?", (str(doc_id),))
+            conn.execute(
+                "INSERT INTO search (kind, ref, title, body) VALUES (?, ?, ?, ?)", _doc_index_row(d)
+            )
+            conn.commit()
+            return _doc_dict(d)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+def unlink_doc(path, card_id, doc_id):
+    """Löst ein Material von der Karte. Hängt es an keiner Karte mehr, wird es
+    als gelöscht markiert (Datei bleibt auf dem Server – Archiv)."""
+    now = time.time()
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "DELETE FROM card_documents WHERE card_id = ? AND doc_id = ?", (card_id, doc_id)
+            )
+            if cur.rowcount == 0:
+                raise NotFound("Verknüpfung nicht gefunden")
+            left = conn.execute(
+                "SELECT COUNT(*) FROM card_documents WHERE doc_id = ?", (doc_id,)
+            ).fetchone()[0]
+            if left == 0:
+                conn.execute(
+                    "UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                    (now, now, doc_id),
+                )
+                conn.execute("DELETE FROM search WHERE kind = 'doc' AND ref = ?", (str(doc_id),))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+def get_file_doc(path, doc_id):
+    conn = _connect(path)
+    try:
+        d = conn.execute(
+            "SELECT * FROM documents WHERE id = ? AND kind = 'file' AND deleted_at IS NULL",
+            (doc_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not d:
+        raise NotFound("Datei nicht gefunden")
+    return d

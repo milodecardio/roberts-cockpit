@@ -1,4 +1,4 @@
-const CACHE = "cockpit-shell-v3";
+const CACHE = "cockpit-shell-v4";
 const SHELL = ["/", "/manifest.json", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -19,6 +19,8 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
   const url = new URL(e.request.url);
   if (url.pathname === "/state") return; // always live, never cached
+  // Materialien und API nie cachen (große Dateien, Gesundheitsdaten, immer aktuell)
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/files/")) return;
 
   e.respondWith(
     fetch(e.request)

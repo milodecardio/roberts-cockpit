@@ -16,12 +16,17 @@ Env-Variablen:
   COCKPIT_ENV                  "production" unterdrückt den Browser-Auto-Open
 """
 import base64
+import hashlib
 import hmac
 import http.server
 import json
+import mimetypes
 import os
+import re
 import socket
 import socketserver
+import tempfile
+import urllib.parse
 import webbrowser
 
 import db
@@ -30,6 +35,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Übergangsweise weiter mitgeschrieben (Rückweg + lesbares Backup).
 STATE = os.path.join(HERE, "cockpit_state.json")
 DB_PATH = os.environ.get("COCKPIT_DB", os.path.join(HERE, "cockpit.db"))
+# Hochgeladene Dateien (später ggf. Hetzner Storage Box an diesem Pfad einhängen)
+FILES_DIR = os.environ.get("COCKPIT_FILES", os.path.join(HERE, "files"))
+MAX_UPLOAD = int(os.environ.get("COCKPIT_MAX_UPLOAD_MB", "1024")) * 1024 * 1024
+
+# Diese Typen darf der Browser direkt anzeigen; alles andere (z. B. HTML, SVG)
+# wird nur als Download ausgeliefert – Schutz vor eingeschleustem Skriptcode.
+INLINE_MIME = re.compile(r"^(image/(png|jpeg|gif|webp|heic|heif|avif)|application/pdf|"
+                         r"audio/.+|video/.+|text/plain)$")
 
 HOST = os.environ.get("COCKPIT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("COCKPIT_PORT", "8077"))
@@ -94,9 +107,172 @@ class Handler(http.server.BaseHTTPRequestHandler):
             {"WWW-Authenticate": 'Basic realm="Roberts Cockpit"'},
         )
 
+    # ─── Materialien & Suche (Etappe 2) ───────────────────────────────
+
+    def _read_json(self, limit=2 * 1024 * 1024):
+        length = int(self.headers.get("Content-Length", 0))
+        if length > limit:
+            raise ValueError("Anfrage zu groß")
+        return json.loads(self.rfile.read(length) or b"{}")
+
+    def _api(self, method):
+        """Gibt True zurück, wenn die Anfrage hier behandelt wurde."""
+        parts = urllib.parse.urlsplit(self.path)
+        p = parts.path
+        try:
+            if method == "GET" and p == "/api/doc-counts":
+                self._json(200, db.doc_counts(DB_PATH))
+                return True
+            if method == "GET" and p == "/api/search":
+                q = urllib.parse.parse_qs(parts.query).get("q", [""])[0]
+                self._json(200, db.search(DB_PATH, q))
+                return True
+            m = re.fullmatch(r"/files/(\d+)(?:/.*)?", p)
+            if method == "GET" and m:
+                self._send_file(int(m.group(1)))
+                return True
+            m = re.fullmatch(r"/api/cards/([^/]+)/(docs|files|links|notes)(?:/(\d+))?", p)
+            if not m:
+                return False
+            card_id = urllib.parse.unquote(m.group(1))
+            what, doc_id = m.group(2), m.group(3)
+            if method == "GET" and what == "docs" and not doc_id:
+                self._json(200, db.card_docs(DB_PATH, card_id))
+            elif method == "DELETE" and what == "docs" and doc_id:
+                db.unlink_doc(DB_PATH, card_id, int(doc_id))
+                self._json(200, {"ok": True})
+            elif method == "POST" and what == "files" and not doc_id:
+                self._json(200, self._receive_file(card_id))
+            elif method == "POST" and what == "links" and not doc_id:
+                data = self._read_json()
+                url = (data.get("url") or "").strip()
+                if not re.match(r"^https?://", url, re.I):
+                    raise ValueError("Link muss mit http:// oder https:// beginnen")
+                self._json(200, db.add_doc(DB_PATH, card_id, "link",
+                                           title=(data.get("title") or "").strip() or url, url=url))
+            elif method == "POST" and what == "notes" and not doc_id:
+                data = self._read_json()
+                body = (data.get("body") or "").strip()
+                title = (data.get("title") or "").strip() or body.split("\n", 1)[0][:80]
+                if not body and not title:
+                    raise ValueError("Notiz ist leer")
+                self._json(200, db.add_doc(DB_PATH, card_id, "note", title=title, body=body))
+            else:
+                self._send(405, "text/plain", b"method not allowed")
+            return True
+        except db.NotFound as e:
+            self._json(404, {"error": str(e)})
+        except ValueError as e:
+            self._json(400, {"error": str(e)})
+        except Exception as e:
+            self._json(500, {"error": str(e)})
+        return True
+
+    def _receive_file(self, card_id):
+        length = int(self.headers.get("Content-Length", 0))
+        if length <= 0:
+            raise ValueError("Leere Datei")
+        if length > MAX_UPLOAD:
+            raise ValueError("Datei zu groß (max. %d MB)" % (MAX_UPLOAD // 1024 // 1024))
+        filename = urllib.parse.unquote(self.headers.get("X-Filename", "")).strip()
+        filename = os.path.basename(filename.replace("\\", "/")) or "datei"
+        mime = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+        if not mime or mime == "application/octet-stream":
+            mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        tmp_dir = os.path.join(FILES_DIR, ".tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
+        h = hashlib.sha256()
+        fd, tmp = tempfile.mkstemp(dir=tmp_dir)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                left = length
+                while left > 0:
+                    chunk = self.rfile.read(min(1024 * 1024, left))
+                    if not chunk:
+                        raise ValueError("Upload abgebrochen")
+                    h.update(chunk)
+                    f.write(chunk)
+                    left -= len(chunk)
+            sha = h.hexdigest()
+            dest = _blob_path(sha)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            if os.path.exists(dest):
+                os.remove(tmp)
+            else:
+                os.replace(tmp, dest)
+        except Exception:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
+        title = os.path.splitext(filename)[0]
+        return db.add_doc(DB_PATH, card_id, "file", title=title, filename=filename,
+                          mime=mime, size=length, sha256=sha)
+
+    def _send_file(self, doc_id):
+        d = db.get_file_doc(DB_PATH, doc_id)
+        path = _blob_path(d["sha256"])
+        size = os.path.getsize(path)
+        mime = d["mime"] or "application/octet-stream"
+        inline = bool(INLINE_MIME.match(mime))
+        disp = "inline" if inline else "attachment"
+        headers = {
+            "Content-Disposition": "%s; filename*=UTF-8''%s" % (disp, urllib.parse.quote(d["filename"] or "datei")),
+            "X-Content-Type-Options": "nosniff",
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=86400",
+        }
+        if not inline:
+            mime = "application/octet-stream"
+        if mime != "application/pdf":
+            # Chromes PDF-Betrachter verträgt keine Sandbox; alle anderen Typen schon.
+            headers["Content-Security-Policy"] = (
+                "sandbox; default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'")
+        start, end = 0, size - 1
+        rng = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip())
+        code = 200
+        if rng and size > 0:
+            a, b = rng.group(1), rng.group(2)
+            if a:
+                start = int(a)
+                end = min(int(b), size - 1) if b else size - 1
+            elif b:
+                start = max(0, size - int(b))
+            if start > end or start >= size:
+                self._send(416, "text/plain", b"", {"Content-Range": "bytes */%d" % size})
+                return
+            code = 206
+            headers["Content-Range"] = "bytes %d-%d/%d" % (start, end, size)
+        self.send_response(code)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(end - start + 1))
+        for k, v in headers.items():
+            self.send_header(k, v)
+        self.end_headers()
+        with open(path, "rb") as f:
+            f.seek(start)
+            left = end - start + 1
+            while left > 0:
+                chunk = f.read(min(1024 * 1024, left))
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return  # Browser hat abgebrochen (z. B. beim Vorspulen)
+                left -= len(chunk)
+
+    def do_DELETE(self):
+        if not self._authorized():
+            self._require_auth()
+            return
+        if not self._api("DELETE"):
+            self._send(404, "text/plain", b"not found")
+
     def do_POST(self):
         if not self._authorized():
             self._require_auth()
+            return
+        if self._api("POST"):
             return
         if self.path == "/state":
             length = int(self.headers.get("Content-Length", 0))
@@ -126,6 +302,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._require_auth()
             return
 
+        if self._api("GET"):
+            return
+
         if self.path in STATIC_FILES:
             rel, ctype = STATIC_FILES[self.path]
             try:
@@ -147,6 +326,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         self._send(404, "text/plain", b"not found")
+
+
+def _blob_path(sha):
+    """Dateien liegen nach Inhalt (SHA-256) abgelegt: files/ab/cd/abcd…"""
+    if not re.fullmatch(r"[0-9a-f]{64}", sha or ""):
+        raise db.NotFound("Datei nicht gefunden")
+    return os.path.join(FILES_DIR, sha[:2], sha[2:4], sha)
 
 
 def write_json_mirror():

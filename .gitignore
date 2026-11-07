@@ -7,3 +7,4 @@ cockpit_backup*.json
 cockpit.db
 cockpit.db-*
 *.tmp
+files/

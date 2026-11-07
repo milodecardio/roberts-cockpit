@@ -37,13 +37,18 @@ Perplexity für öffentliche Web-Recherche.
 
 ## Etappen
 
-### Etappe 1 – Fundament: SQLite statt JSON-Datei
+### Etappe 1 – Fundament: SQLite statt JSON-Datei ✅ live seit 07.11.2026
 - Karten liegen in `cockpit.db` (SQLite) statt in `cockpit_state.json`.
 - Die Schnittstelle `/state` bleibt gleich → im Cockpit ändert sich nichts.
 - Gelöschte Karten werden nur als gelöscht markiert (bleiben fürs Wissensarchiv erhalten).
 - Übergangsweise wird weiterhin `cockpit_state.json` mitgeschrieben (einfacher Rückweg).
 
-### Etappe 2 – Materialien an Karten
+### Etappe 2 – Materialien an Karten ✅ live seit 07.11.2026
+Umgesetzt: Dateien (Upload, Foto/Scan per Handy-Kamera, Drag&Drop), Links, Notizen;
+📎-Zähler auf Karten; Suche findet Karten auch über Titel/Notizen/Links ihrer Materialien.
+Dateien liegen nach Inhalt (SHA-256) in `files/` – gleiche Datei wird nur einmal gespeichert.
+Gelöste Materialien bleiben im Archiv. Text *in* Dateien wird erst in Etappe 3 durchsuchbar.
+Noch offen: Material an weitere Karte hängen (außer durch erneuten Upload), Notizen bearbeiten.
 - Dateien hochladen (Browser, Handy-Kamera), Links und Notizen an Karten hängen.
 - Tabellen `documents` und `card_documents` (eine Datei kann zu mehreren Karten gehören).
 - Volltextsuche (SQLite FTS5) über Karten und Dokumente.
