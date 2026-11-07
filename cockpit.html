@@ -536,6 +536,7 @@ function editCard(id,col){
     </div>
     ${id?`<div class="rel" id="rel"></div>`:""}
     <div class="modal-actions">${id?`<button class="btn" style="margin-right:auto;color:var(--steuer)" onclick="delCard('${c.id}')">Löschen</button>`:""}
+      ${id?`<button class="btn" onclick="research()" title="Mit Perplexity im Web recherchieren">🔎 Recherchieren</button>`:""}
       <button class="btn" onclick="closeM()">Abbrechen</button>
       <button class="btn primary" onclick="saveCard('${c.id}',${!!id})">Speichern</button></div>`;
   M.classList.add("open");
@@ -728,6 +729,15 @@ function saveCard(cid,exists){
   const obj={id:cid,col:g("m_col"),cat:g("m_cat"),sub:g("m_sub").trim(),owner:g("m_owner").trim(),prio:g("m_prio"),t:g("m_t").trim()||"Unbenannt",note:g("m_note"),src:g("m_src")};
   if(exists){const i=state.cards.findIndex(x=>x.id===cid);state.cards[i]={...state.cards[i],...obj};}else state.cards.push({tools:[],...obj});
   save();closeM();render();
+}
+// Perplexity: Frage aus der Karte vorformulieren; Robert kann sie vor dem Absenden ändern
+// (Perplexity sieht nur, was in dieser Frage steht – private Details ggf. herauslöschen).
+function research(){
+  const v=i=>(document.getElementById(i)||{}).value||"";
+  const note=v("m_note").replace(/\s+/g," ").trim().slice(0,400);
+  const draft=`${v("m_t").trim()}${note?" – "+note:""}. Was muss ich dazu wissen (aktueller Stand, Fristen, Ansprechpartner, Kosten)? Kontext: Deutschland/Bayern. Bitte mit Quellen.`;
+  const q=prompt("Frage an Perplexity (vor dem Absenden anpassen, private Details ggf. löschen):",draft);
+  if(q&&q.trim())window.open("https://www.perplexity.ai/search?q="+encodeURIComponent(q.trim()),"_blank","noopener");
 }
 function delCard(id){if(!confirm("Karte löschen?"))return;state.cards=state.cards.filter(x=>x.id!==id);save();closeM();render();}
 function esc(s){return(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}

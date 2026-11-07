@@ -72,7 +72,16 @@ Jede Datei wird in Text umgewandelt, in Abschnitte geteilt und mit bge-m3 vektor
 - „Ähnliche Materialien“ direkt an jeder Karte.
 - Suche nach Bedeutung über alles.
 
-### Etappe 4 – Claude als Assistent
+### Etappe 4 – Claude als Assistent ✅ live (07.11.2026)
+- Adresse für den Connector: `https://cockpit.robert-beckert.de/mcp`
+- Werkzeuge: cockpit_uebersicht, suchen, karten_auflisten, karte_lesen, dokument_lesen,
+  bibliothek, karte_anlegen, karte_aendern, material_verknuepfen, notiz_anhaengen (kein Löschen).
+- Jede Änderung durch Claude steht in der Tabelle `activity` (`/api/activity`).
+- Verbindungen anzeigen/trennen: `cd /opt/roberts-cockpit && sudo -u cockpit python3 oauth.py --liste|--trennen`
+- Konfliktschutz: Frontend speichert mit `_base`; veralteter Stand → 409 → feldweises Zusammenführen.
+- Perplexity: Knopf „🔎 Recherchieren“ in der Karte (Frage vor dem Absenden editierbar).
+
+Ursprünglicher Plan:
 - **MCP-Server** auf dem Hetzner-Server, in claude.ai als *eigener Connector* eingebunden
   (funktioniert mit Claude Pro, Nutzung zählt zu den Pro-Limits, keine API-Kosten).
 - Werkzeuge für Claude: Wissen durchsuchen, Karten lesen/anlegen/verschieben,
