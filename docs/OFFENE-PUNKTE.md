@@ -13,9 +13,9 @@ Letzte DB-Sicherung: `backups/cockpit-2026-11-11-…-vor-erledigt-datum.db` (280
 ## Neu am 11.11. abends: Upload ohne Karte + OneDrive-Scan-Eingang
 - [ ] Robert: „✉️ Outlook“ → Trennen → Verbinden (holt Files.ReadWrite ins Token), dann Hinweis in 📚 weg?
 - [ ] Testscan in „AAA Cockpit-Eingang“ → nach ≤ 10 Min. in 📚 (Quelle onedrive-scan), Datei in „übernommen“.
-- [ ] 📚 Upload testen auf Mac (Ziehen), Windows, iPad (Ziehen aus Dateien-App), iPhone (Knopf → Datei auswählen → ⋯ → Dokumente scannen).
-- [ ] Später (C): Teilen-Menü am iPhone (PWA share target) → Bibliothek. Hinweis: iOS-Safari unterstützt
-      share_target für Web-Apps derzeit nicht; auf Android geht es. Für das iPhone ggf. Kurzbefehl (Shortcuts) → /api/import/file.
+- [ ] 📚 Upload testen auf Mac (Ziehen), Windows (Ziehen), Samsung-Handy/-Tablet (Knöpfe „Datei hinzufügen“ / „📷 Foto“).
+- [ ] Später (C): Teilen-Menü am Samsung/Android (PWA share_target im manifest.json, installierte Chrome-PWA) → Bibliothek.
+      Robert nutzt Samsung/Android, kein iPhone.
 
 ## Entscheidungen, die Robert treffen muss
 - [ ] **Claude im Cockpit (Variante A)**: eigenes Claude-Fenster im Cockpit über die API (ohne App-Wechsel, ohne Zusatztipp).
