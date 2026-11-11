@@ -1,4 +1,4 @@
-const CACHE = "cockpit-shell-v6";
+const CACHE = "cockpit-shell-v7";
 const SHELL = ["/", "/manifest.json", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {

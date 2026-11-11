@@ -21,7 +21,8 @@
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--txt);font-size:14.5px;line-height:1.45}
-  header{padding:12px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;background:rgba(15,18,32,.95);backdrop-filter:blur(8px);z-index:40}
+  header{padding:12px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--bg)}
+  #stick{position:sticky;top:0;z-index:40;background:rgba(15,18,32,.97);backdrop-filter:blur(8px)}
   header h1{font-size:18px;margin:0;font-weight:650}
   header .sub{color:var(--mut);font-size:12px}
   .spacer{flex:1}
@@ -147,6 +148,40 @@
   .mailres .mr small{color:var(--mut);display:block;overflow-wrap:anywhere}
   #uplFloat{position:fixed;right:16px;bottom:16px;z-index:60;max-width:min(360px,calc(100vw - 32px))}
   #uplFloat .up{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:7px 10px;margin-top:6px;color:var(--txt)}
+  /* Karten auf-/zuklappen, Handy-Ansicht */
+  .card .t{display:flex;gap:6px;align-items:flex-start;cursor:pointer}
+  .card .t .tt{flex:1;min-width:0}
+  .card .t .tw{color:var(--mut);font-size:11px;line-height:1.7;flex-shrink:0}
+  .card .ed{background:none;border:none;color:var(--mut);cursor:pointer;font-size:13px;padding:0 2px;flex-shrink:0;line-height:1.4}
+  .card .ed:hover{color:var(--acc)}
+  .card.closed .note,.card.closed .src{display:none}
+  .card.closed .sub-t{margin-bottom:0}
+  .hitbar{font-size:12.5px;color:var(--mut);margin:-4px 0 12px;display:flex;gap:12px;flex-wrap:wrap}
+  .hitbar .cl{color:var(--acc);cursor:pointer}
+  .viewbar{display:flex;gap:6px;align-items:center}
+  .doc-form .btn{white-space:nowrap}
+  .col h2 .tg{display:none}
+  .chips{display:contents}
+  @media(max-width:760px){
+    header{padding:8px 12px}header .sub{display:none}
+    nav{padding:5px 12px}
+    .filters{padding:6px 12px}
+    .chips{display:flex;gap:6px;order:3;width:100%;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+    .chips::-webkit-scrollbar{display:none}
+    .chips .chip{white-space:nowrap;flex-shrink:0}
+    .filters .subfilters{order:4;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-top:0}
+    .filters .subfilters .chip{white-space:nowrap;flex-shrink:0}
+    #search{order:1;min-width:0;flex:1 1 auto;margin-left:0;font-size:16px}
+    .viewbar{order:2}
+    main{padding:10px 10px 40px}
+    .banner{display:none}
+    .board{flex-direction:column;overflow-x:visible;gap:8px}
+    .col{min-width:0;max-width:none;width:100%;max-height:none}
+    .col h2{cursor:pointer;padding:11px 12px;font-size:13px}
+    .col h2 .tg{display:inline;color:var(--mut);font-size:12px}
+    .col.closed .drop{display:none}
+    .col .drop{overflow-y:visible}
+  }
   @media(max-width:760px){.grid2,.frow{grid-template-columns:1fr}}
 </style>
 </head>
@@ -162,8 +197,8 @@
   <button class="btn sm" onclick="importData()">⬆︎ Import</button>
   <button class="btn sm" onclick="resetData()">↺ Standard</button>
 </header>
-<nav id="nav"></nav>
-<div class="filters" id="filters"></div>
+<div id="stick"><nav id="nav"></nav>
+<div class="filters" id="filters"></div></div>
 <main id="view"></main>
 <div id="toast"></div>
 <div id="uplFloat"></div>
@@ -306,6 +341,19 @@ function startPoll(){
 
 // ─── Nav & Filters ───────────────────────────────────────
 let activeView="board",filterCat="alle",filterSub="alle",searchQ="";
+// Auf-/Zugeklappt wird pro Gerät gemerkt (nicht synchronisiert): Handy zu, Mac auf usw.
+const UIKEY="cockpit_ui_v1";
+let ui={allClosed:null,cards:{},cols:{},hits:false};
+try{Object.assign(ui,JSON.parse(localStorage.getItem(UIKEY)||"{}"));}catch(e){}
+const isNarrow=()=>window.matchMedia("(max-width:760px)").matches;
+if(ui.allClosed===null)ui.allClosed=isNarrow();
+function keepUi(){try{localStorage.setItem(UIKEY,JSON.stringify(ui));}catch(e){}}
+function cardClosed(id){return id in ui.cards?ui.cards[id]:ui.allClosed;}
+function toggleCard(e,id){e.stopPropagation();ui.cards[id]=!cardClosed(id);keepUi();render();}
+function setAllCards(closed){ui.allClosed=closed;ui.cards={};keepUi();render();}
+const COL_DEFAULT_CLOSED={geparkt:1,erledigt:1};
+function colClosed(id){return id in ui.cols?ui.cols[id]:!!COL_DEFAULT_CLOSED[id];}
+function toggleCol(id){if(!isNarrow())return;ui.cols[id]=!colClosed(id);keepUi();render();}
 
 const VIEWS=[["board","🗂 Kanban"],["lib","📚 Bibliothek"],["ctx","📋 Kontext & Anforderungen"]];
 function renderNav(){
@@ -317,9 +365,11 @@ function renderFilters(){
   const f=document.getElementById("filters");
   if(activeView!=="board"){f.style.display="none";return;}
   f.style.display="flex";
-  let html=`<span class="chip ${filterCat==='alle'?'active':''}" onclick="setFilter('alle')">Alle</span>`;
+  let html=`<div class="chips"><span class="chip ${filterCat==='alle'?'active':''}" onclick="setFilter('alle')">Alle</span>`;
   for(const k in CATS) html+=`<span class="chip ${filterCat===k?'active':''}" onclick="setFilter('${k}')"><span class="d" style="background:${CATS[k][1]}"></span>${CATS[k][0]}</span>`;
+  html+=`</div>`;
   html+=`<input id="search" placeholder="🔍 Karten & Materialien suchen…" value="${esc(searchQ)}" oninput="searchQ=this.value;render();serverSearch()">`;
+  html+=`<span class="viewbar"><button class="btn sm" onclick="setAllCards(${!ui.allClosed})" title="Alle Karten auf- bzw. zuklappen">${ui.allClosed?"▾ Alle auf":"▸ Alle zu"}</button></span>`;
   const subs=[...new Set(state.cards.filter(c=>c.cat===filterCat&&c.sub).map(c=>c.sub))].sort((a,b)=>a.localeCompare(b,"de",{numeric:true}));
   if(subs.length){
     html+=`<div class="subfilters"><span class="chip ${filterSub==='alle'?'active':''}" onclick="setSub('alle')">Alle Unterthemen</span>`;
@@ -392,6 +442,15 @@ function semHTML(){
 async function loadDocCounts(){
   try{const r=await fetch('/api/doc-counts');if(r.ok){docCounts=await r.json();if(activeView==="board")render();}}catch(e){}
 }
+function hitBar(){
+  const q=searchQ.trim();if(!q)return"";
+  const nd=srv.q===q?srv.docs.length:0;
+  const seen=new Set(srv.docs.map(d=>d.id));
+  const ns=sem.q===q?sem.docs.filter(d=>!seen.has(d.id)&&d.score>=0.40).slice(0,8).length:0;
+  if(!nd&&!ns)return"";
+  return `<div class="hitbar">${nd?`<span>📎 ${nd} Treffer in Materialien</span>`:""}${ns?`<span>🧠 ${ns} ähnliche</span>`:""}
+    <span class="cl" onclick="ui.hits=!ui.hits;keepUi();render()">${ui.hits?"ausblenden":"anzeigen"}</span></div>`;
+}
 function hitsHTML(){
   if(!searchQ.trim()||srv.q!==searchQ.trim()||!srv.docs.length)return"";
   const mark=s=>esc(s||"").replace(/\u0002/g,"<mark>").replace(/\u0003/g,"</mark>");
@@ -405,14 +464,15 @@ function hitsHTML(){
 
 // ─── Board ───────────────────────────────────────────────
 function renderBoard(){
-  let html=`<div class="banner">Neue Aufgaben landen im <b>📥 Eingang</b> – von dort per Drag&Drop einsortieren. Bereich wählen, dann nach <b>Unterthema</b> filtern. <b>⇅ Prio / ⇅ Kat</b> sortiert die Spalte. Karte anklicken → unten <b>📎 Materialien</b>: Dateien, Fotos, Links und Notizen anhängen. Die Suche findet auch Inhalte in Materialien.</div>${hitsHTML()}${semHTML()}<div class="board">`;
+  let html=`<div class="banner">Neue Aufgaben landen im <b>📥 Eingang</b> – von dort per Drag&Drop einsortieren. Bereich wählen, dann nach <b>Unterthema</b> filtern. <b>⇅ Prio / ⇅ Kat</b> sortiert die Spalte. Karte anklicken → unten <b>📎 Materialien</b>: Dateien, Fotos, Links und Notizen anhängen. Die Suche findet auch Inhalte in Materialien. Titel antippen klappt eine Karte auf/zu, ✎ öffnet sie.</div>${hitBar()}${ui.hits?hitsHTML()+semHTML():""}<div class="board">`;
   for(const [id,label] of COLS){
     const cards=state.cards.filter(c=>c.col===id&&visible(c));
-    html+=`<div class="col ${id}"
+    html+=`<div class="col ${id} ${colClosed(id)?"closed":""}"
       ondragover="event.preventDefault();this.classList.add('over')"
       ondragleave="this.classList.remove('over')"
       ondrop="onDropCol(event,'${id}')">
-      <h2>
+      <h2 onclick="toggleCol('${id}')">
+        <span class="tg">${colClosed(id)?"▸":"▾"}</span>
         <span class="lbl">${label}</span>
         <span class="sort-btns">
           <button class="sort-btn" onclick="event.stopPropagation();sortColByPrio('${id}')">⇅ Prio</button>
@@ -428,14 +488,16 @@ function renderBoard(){
 
 function cardHTML(c){
   const cat=CATS[c.cat]||["?","var(--line)"];
-  return `<div class="card" draggable="true" style="border-left-color:${cat[1]}"
+  const closed=cardClosed(c.id);
+  return `<div class="card ${closed?"closed":""}" draggable="true" style="border-left-color:${cat[1]}"
     ondragstart="onDragStart(event,'${c.id}')"
     ondragend="onDragEnd(event)"
     ondragover="onDragOver(event,'${c.id}')"
     ondragleave="this.classList.remove('drag-over')"
     ondrop="onDropCard(event,'${c.id}')"
     onclick="editCard('${c.id}')">
-    <div class="t">${esc(c.t)}</div>
+    <div class="t" onclick="toggleCard(event,'${c.id}')" title="Auf-/zuklappen"><span class="tw">${closed?"▸":"▾"}</span><span class="tt">${esc(c.t)}</span>
+      <button class="ed" title="Karte öffnen/bearbeiten" onclick="event.stopPropagation();editCard('${c.id}')">✎</button></div>
     <div class="meta"><span class="tag" style="background:${hexa(cat[1])};color:${cat[1]}">${cat[0]}</span><span class="prio ${c.prio}">${c.prio}</span>${c.owner&&c.owner!=="Robert"?`<span class="owner">👤 ${esc(c.owner)}</span>`:""}${docCounts[c.id]?`<span class="att">📎 ${docCounts[c.id]}</span>`:""}</div>
     ${c.sub?`<div class="sub-t">${esc(c.sub)}</div>`:""}
     ${c.note?`<div class="note">${esc(c.note)}</div>`:""}
@@ -908,6 +970,7 @@ try{
   document.getElementById('view').innerHTML='<div style="padding:20px;color:#ff7a7a;font-family:monospace;font-size:13px;white-space:pre-wrap">INIT-FEHLER: '+e.message+'\n'+e.stack+'</div>';
 }
 initState().then(()=>{startPoll();loadDocCounts();});
+window.matchMedia("(max-width:760px)").addEventListener("change",()=>render());
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('/service-worker.js').catch(()=>{}));
 }
