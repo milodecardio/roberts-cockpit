@@ -32,6 +32,10 @@ COL_WORDS = {"eingang": "eingang", "heute": "heute", "dringend": "heute", "dring
              "woche": "woche", "nächstes": "naechstes", "naechstes": "naechstes", "nächste": "naechstes",
              "später": "spaeter", "spaeter": "spaeter", "geparkt": "geparkt", "geparkte": "geparkt",
              "erledigt": "erledigt", "erledigte": "erledigt", "offen": "offen", "offene": "offen"}
+# Eigenschaftswörter vor „Karten“ („die offenen Karten“, „erledigten Karten“) – gelten als Spaltenfilter
+COL_ADJ = {"offen": "offen", "offene": "offen", "offenen": "offen", "offener": "offen",
+           "erledigte": "erledigt", "erledigten": "erledigt", "erledigter": "erledigt",
+           "geparkte": "geparkt", "geparkten": "geparkt", "dringende": "heute", "dringenden": "heute"}
 PRIO_WORDS = {"hoch": "Hoch", "mittel": "Mittel", "niedrig": "Niedrig"}
 CAT_NAMES = {"vision": "vision", "medizin": "b4", "pflege": "b5", "technik": "b3", "privat": "b6",
              "privates": "b6", "beruflich": "b1", "recht": "b2", "verwaltung": "b2", "sonstiges": "b7"}
@@ -74,7 +78,7 @@ def parse(q):
             types.append(t)
     res = {"types": types, "from": None, "col": None, "cat": None, "sub": None, "prio": None,
            "outlook": False, "text": "", "semantic": False}
-    text, i = [], 0
+    text, i, pending_col = [], 0, []
     while i < len(low):
         w, orig = low[i], words[i].strip(".,;!?")
         prev = low[i - 1] if i else ""
@@ -102,6 +106,8 @@ def parse(q):
                 res["sub"] = w.upper()
         elif w in COL_WORDS and ("card" in types or prev in ("spalte", "in", "im")):
             res["col"] = COL_WORDS[w]
+        elif w in COL_ADJ:
+            pending_col.append((COL_ADJ[w], orig, len(text)))
         elif w in PRIO_WORDS and prev in ("prio", "priorität", "prioritaet"):
             res["prio"] = PRIO_WORDS[w]
         elif w in CAT_NAMES and (prev in ("bereich", "kategorie") or w == "vision"):
@@ -111,6 +117,11 @@ def parse(q):
         elif orig:
             text.append(orig)
         i += 1
+    for col, orig, pos in reversed(pending_col):
+        if "card" in types:          # „offene Rechnung“ ohne „Karten“ bleibt ein Suchwort
+            res["col"] = res["col"] or col
+        elif orig:
+            text.insert(pos, orig)
     res["text"] = " ".join(text)
     natural = len(words) >= 6 or bool(NATURAL.search(raw))
     res["semantic"] = bool(res["text"]) and natural
