@@ -156,6 +156,26 @@
   .card .ed:hover{color:var(--acc)}
   .card.closed .note,.card.closed .src{display:none}
   .card.closed .sub-t{margin-bottom:0}
+  .done-d{font-size:11.5px;color:#7ee0a6;margin-top:4px}
+  .donerow .datef{display:flex;gap:6px;align-items:center}
+  .donerow .datef input{max-width:150px;font-variant-numeric:tabular-nums}
+  .calpop{position:fixed;z-index:200;background:var(--panel);border:1px solid var(--acc);border-radius:12px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.45);outline:none;color:var(--txt)}
+  .calpop .cal-y,.calpop .cal-m{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .calpop .cal-y span{font-size:18px;font-weight:700;padding:2px 18px;cursor:ns-resize;touch-action:none;user-select:none}
+  .calpop .cal-y button,.calpop .cal-m button{background:none;border:1px solid var(--line);color:var(--txt);border-radius:8px;width:34px;height:30px;font-size:18px;cursor:pointer}
+  .calpop button:disabled{opacity:.3;cursor:default}
+  .calpop .cal-wd,.calpop .cal-g{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center}
+  .calpop .cal-wd span{font-size:11px;color:var(--mut)}
+  .calpop .cal-g button{background:none;border:1px solid transparent;color:var(--txt);border-radius:7px;height:34px;font-size:14px;cursor:pointer}
+  .calpop .cal-g button:hover:not(:disabled){border-color:var(--line)}
+  .calpop .cal-g button.tod{border-color:var(--acc2)}
+  .calpop .cal-g button.sel{background:var(--acc);color:#0b0f1a;font-weight:700}
+  .calpop .cal-f{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px}
+  .askbar{position:fixed;inset:0;background:rgba(5,7,15,.55);z-index:160;display:flex;align-items:flex-start;justify-content:center;padding:16px;padding-top:12vh}
+  .askbar .ab-in{background:var(--panel);border:1px solid var(--acc);border-radius:14px;width:100%;max-width:560px;padding:12px;display:flex;flex-direction:column;gap:8px}
+  .askbar .ab-h{display:flex;align-items:center}.askbar .ab-h b{flex:1}
+  .askbar textarea{font-size:16px;line-height:1.45}
+  .askbar .ab-act{display:flex;gap:8px;justify-content:flex-end}
   .hitbar{font-size:12.5px;color:var(--mut);margin:-4px 0 12px;display:flex;gap:12px;flex-wrap:wrap}
   .hitbar .cl{color:var(--acc);cursor:pointer}
   .viewbar{display:flex;gap:6px;align-items:center}
@@ -531,28 +551,53 @@ async function checkBoardView(){
     searchQ="";fnd={q:"",interp:null,cards:null,why:{},docs:[]};
     if(activeView!=="board"){activeView="board";renderNav();}
     closeNotePop();hideNotePeek();render();toast("🤖 Claude zeigt: "+claudeView.title);
+    if(v.open&&state.cards.some(c=>c.id===v.open)){
+      if(M.classList.contains("open")&&_edit&&editVals()!==_edit.snap)toast("🤖 Claude möchte Karte öffnen – erst die offene Karte schließen");
+      else{closeM();editCard(v.open);}
+    }
   }catch(e){}
 }
 setInterval(()=>{if(document.visibilityState==="visible")checkBoardView();},5000);
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")checkBoardView();});
 function askClaude(){
   const f=document.getElementById("search");
-  let q=((f&&f.value)||"").trim()||(prompt("Frage an Claude:")||"").trim();
-  if(!q)return;
-  const text=q+"\n\n(Bitte über meinen Connector „Roberts Cockpit“ beantworten; passende Karten gern mit im_cockpit_anzeigen im Cockpit zeigen.)";
+  const q=((f&&f.value)||"").trim();
+  if(q){sendClaude(q);return;}
+  openAsk();
+}
+function openAsk(){
+  closeAsk();
+  const p=document.createElement("div");p.id="askBar";p.className="askbar";
+  p.innerHTML=`<div class="ab-in"><div class="ab-h"><b>🤖 Frage an Claude</b><button class="xclose" onclick="closeAsk()" title="Schließen (Esc)">✕</button></div>
+    <textarea id="ask_q" rows="3" placeholder="z. B. Wann habe ich mich bei der Stadt Friedberg beworben?"
+      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendClaude()}"></textarea>
+    <div class="ab-act">${SpeechRec?`<button class="btn sm" onclick="dictate('ask_q')">🎤 Sprechen</button>`:""}
+      <button class="btn sm primary" onclick="sendClaude()">An Claude senden</button></div></div>`;
+  document.body.appendChild(p);
+  setTimeout(()=>{const t=document.getElementById("ask_q");if(t)t.focus();},0);
+}
+function closeAsk(){const p=document.getElementById("askBar");if(p){p.remove();return true;}return false;}
+function sendClaude(q){
+  if(q===undefined){const t=document.getElementById("ask_q");q=((t&&t.value)||"").trim();}
+  if(!q){toast("Bitte zuerst eine Frage eingeben");return;}
+  const text=q+"\n\n(Bitte über meinen Connector „Roberts Cockpit“ beantworten; passende Karten mit im_cockpit_anzeigen im Cockpit zeigen.)";
   try{navigator.clipboard&&navigator.clipboard.writeText(text).catch(()=>{});}catch(e){}
+  const web=()=>window.open("https://claude.ai/new?q="+encodeURIComponent(text),"_blank","noopener");
+  closeAsk();
   if(navigator.share&&window.matchMedia("(hover:none)").matches){
-    navigator.share({text}).catch(()=>{});   // Teilen-Menü → Claude wählen
-  }else{
-    window.open("https://claude.ai/new?q="+encodeURIComponent(text),"_blank","noopener");
-  }
-  toast("🤖 Frage an Claude übergeben (auch in der Zwischenablage)");
+    // Teilen-Menü → „Claude“ wählen. Klappt das nicht, claude.ai mit vorausgefüllter Frage öffnen.
+    navigator.share({text}).catch(e=>{if(!e||e.name!=="AbortError")web();});
+  }else web();
+  toast("🤖 An Claude übergeben (liegt auch in der Zwischenablage)");
 }
 const SpeechRec=window.SpeechRecognition||window.webkitSpeechRecognition;
-function dictate(){
+function dictate(target){
   if(!SpeechRec)return;
   const r=new SpeechRec();r.lang="de-DE";r.interimResults=false;r.maxAlternatives=1;
-  r.onresult=e=>{const t=e.results[0][0].transcript.trim();if(!t)return;searchQ=t;claudeView=null;render();serverSearch();};
+  r.onresult=e=>{const t=e.results[0][0].transcript.trim();if(!t)return;
+    const el=target&&document.getElementById(target);
+    if(el){el.value=(el.value.trim()?el.value.trim()+" ":"")+t;el.focus();return;}
+    searchQ=t;claudeView=null;render();serverSearch();};
   r.onerror=e=>toast("🎤 "+(e.error==="not-allowed"?"Mikrofon nicht erlaubt":"Spracheingabe nicht möglich"));
   try{r.start();toast("🎤 Sprich jetzt …");}catch(e){}
 }
@@ -563,16 +608,22 @@ function renderBoard(){
   if(!claudeView&&fnd.interp&&fnd.q===searchQ.trim()&&fnd.interp.mode==="docs")
     return html+`<div class="results">${outlookHTML()}${docResultsHTML(fnd.docs)}</div>`;
   html+=`${olRes?`<div class="results">${outlookHTML()}</div>`:""}<div class="board">`;
+  const filtering=!!(claudeView||searchQ.trim());
+  let shown=0;
   for(const [id,label] of COLS){
-    const cards=state.cards.filter(c=>c.col===id&&visible(c));
-    html+=`<div class="col ${id} ${colClosed(id)?"closed":""}"
+    let cards=state.cards.filter(c=>c.col===id&&visible(c));
+    if(id==="erledigt")cards=sortDone(cards);
+    if(filtering&&!cards.length)continue;   // bei Suche/Claude-Anzeige nur Spalten mit Treffern
+    shown++;
+    const closed=!filtering&&colClosed(id);
+    html+=`<div class="col ${id} ${closed?"closed":""}"
       ondragover="event.preventDefault();this.classList.add('over')"
       ondragleave="this.classList.remove('over')"
       ondrop="onDropCol(event,'${id}')">
       <h2 onclick="toggleCol('${id}')">
-        <span class="tg">${colClosed(id)?"▸":"▾"}</span>
+        <span class="tg">${closed?"▸":"▾"}</span>
         <span class="lbl">${label}</span>
-        <span class="sort-btns">
+        <span class="sort-btns" ${id==="erledigt"?'style="display:none"':""}>
           <button class="sort-btn" onclick="event.stopPropagation();sortColByPrio('${id}')">⇅ Prio</button>
           <button class="sort-btn" onclick="event.stopPropagation();sortColByCat('${id}')">⇅ Kat</button>
         </span>
@@ -581,6 +632,7 @@ function renderBoard(){
       <div class="drop">${cards.map(cardHTML).join("")}<button class="addcard" onclick="editCard(null,'${id}')">+ Karte</button></div>
     </div>`;
   }
+  if(filtering&&!shown)html+=`<div class="hint" style="padding:12px">Keine passenden Karten.</div>`;
   return html+`</div>`;
 }
 
@@ -602,6 +654,7 @@ function cardHTML(c){
       ontouchstart="peekTouch(event,this,'${c.id}')" ontouchend="peekTouchEnd()" ontouchmove="peekTouchEnd()"
       oncontextmenu="if(_peekShown)event.preventDefault()">${esc(c.note)}</div>`:""}
     ${c.src?`<div class="src">${esc(c.src)}</div>`:""}
+    ${c.col==="erledigt"&&c.done?`<div class="done-d">✅ ${isoToDe(c.done)}</div>`:""}
   </div>`;
 }
 
@@ -673,7 +726,7 @@ function onDropCard(e,targetId){
   const targetCard=state.cards.find(x=>x.id===targetId);
   if(fromIdx<0||!targetCard){dragId=null;return;}
   const dragCard=state.cards[fromIdx];
-  dragCard.col=targetCard.col;
+  setCol(dragCard,targetCard.col);
   state.cards.splice(fromIdx,1);
   const newTo=state.cards.findIndex(x=>x.id===targetId);
   state.cards.splice(newTo,0,dragCard);
@@ -684,7 +737,7 @@ function onDropCol(e,col){
   document.querySelectorAll('.col').forEach(c=>c.classList.remove('over'));
   if(!dragId){if(e.dataTransfer&&e.dataTransfer.types.length)toast("Dateien und Mails bitte direkt auf eine Karte ziehen");return;}
   const c=state.cards.find(x=>x.id===dragId);
-  if(c){c.col=col;save();render();}
+  if(c){setCol(c,col);save();render();}
   dragId=null;
 }
 
@@ -727,13 +780,130 @@ function sortColByCat(col){
 let toastT=null;
 function toast(msg){const el=document.getElementById("toast");el.textContent=msg;el.classList.add("show");clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove("show"),2600);}
 
+// ─── Erledigt-Datum ───────────────────────────────────────
+const pad2=n=>String(n).padStart(2,"0");
+const dIso=d=>`${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+function todayIso(){return dIso(new Date());}
+function todayDe(){return isoToDe(todayIso());}
+function isoToDe(iso){const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(iso||"");return m?`${m[3]}.${m[2]}.${m[1]}`:"";}
+function deToIso(de){
+  const m=/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec((de||"").trim());if(!m)return"";
+  const d=new Date(+m[3],+m[2]-1,+m[1]);
+  return d.getDate()===+m[1]&&d.getMonth()===+m[2]-1?dIso(d):"";
+}
+function isoToDate(iso){const [y,m,d]=iso.split("-").map(Number);return new Date(y,m-1,d);}
+function fmtDateInput(el){   // Ziffern automatisch zu TT.MM.JJJJ
+  const dg=el.value.replace(/\D/g,"").slice(0,8);
+  el.value=dg.length>4?`${dg.slice(0,2)}.${dg.slice(2,4)}.${dg.slice(4)}`:dg.length>2?`${dg.slice(0,2)}.${dg.slice(2)}`:dg;
+}
+function sortDone(cards){
+  // chronologisch absteigend: neueste Erledigung oben; Karten ohne Datum ans Ende (Reihenfolge bleibt)
+  return cards.map((c,i)=>[c,i]).sort((a,b)=>{
+    const x=a[0].done||"",y=b[0].done||"";
+    return x===y?a[1]-b[1]:(x<y?1:-1);
+  }).map(p=>p[0]);
+}
+function setCol(c,col){
+  if(c.col!==col){if(col==="erledigt")c.done=c.done||todayIso();else delete c.done;}
+  c.col=col;
+}
+function showDoneRow(){
+  const on=document.getElementById("m_col").value==="erledigt",row=document.getElementById("m_donerow");
+  row.hidden=!on;
+  const f=document.getElementById("m_done");if(on&&!f.value.trim())f.value=todayDe();
+}
+// Kalender: Monat mit ‹ ›, Jahr mit ‹ › oder Wischen; Pfeiltasten wandern über Monatsgrenzen; nichts in der Zukunft
+let cal=null;   // {sel: Date, view: Date(1. des Monats)}
+function openCal(){
+  const f=document.getElementById("m_done");if(!f)return;
+  const iso=deToIso(f.value),today=isoToDate(todayIso());
+  let sel=iso?isoToDate(iso):today;if(sel>today)sel=today;
+  cal={sel,view:new Date(sel.getFullYear(),sel.getMonth(),1)};
+  closeCal(true);
+  const p=document.createElement("div");p.id="calPop";p.className="calpop";p.tabIndex=-1;
+  p.addEventListener("keydown",calKey);
+  document.body.appendChild(p);
+  const r=f.getBoundingClientRect(),w=Math.min(300,window.innerWidth-24);
+  p.style.width=w+"px";p.style.left=Math.max(12,Math.min(r.left,window.innerWidth-w-12))+"px";
+  renderCal();
+  const h=p.offsetHeight;p.style.top=(r.bottom+6+h<window.innerHeight-8?r.bottom+6:Math.max(8,r.top-h-6))+"px";
+  p.focus();
+}
+function closeCal(silent){const p=document.getElementById("calPop");if(p){p.remove();cal=silent?cal:null;return true;}return false;}
+const MONTHS=["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
+function renderCal(){
+  const p=document.getElementById("calPop");if(!p||!cal)return;
+  const today=isoToDate(todayIso()),v=cal.view,y=v.getFullYear(),m=v.getMonth();
+  const first=(new Date(y,m,1).getDay()+6)%7,days=new Date(y,m+1,0).getDate();
+  const nextOk=new Date(y,m+1,1)<=today,yNextOk=new Date(y+1,0,1)<=today||new Date(y+1,m,1)<=today;
+  let g="";for(let i=0;i<first;i++)g+=`<span></span>`;
+  for(let d=1;d<=days;d++){
+    const dt=new Date(y,m,d),fut=dt>today,sel=dt.getTime()===cal.sel.getTime(),tod=dt.getTime()===today.getTime();
+    g+=`<button type="button" class="${sel?"sel":""} ${tod?"tod":""}" ${fut?"disabled":""} onclick="calPick(${y},${m},${d})">${d}</button>`;
+  }
+  p.innerHTML=`<div class="cal-y"><button type="button" onclick="calYear(-1)" title="Jahr zurück">‹</button>
+      <span id="calYear" title="Wischen ändert das Jahr">${y}</span>
+      <button type="button" onclick="calYear(1)" ${yNextOk?"":"disabled"} title="Jahr vor">›</button></div>
+    <div class="cal-m"><button type="button" onclick="calMonth(-1)" title="Monat zurück">‹</button>
+      <b>${MONTHS[m]}</b>
+      <button type="button" onclick="calMonth(1)" ${nextOk?"":"disabled"} title="Monat vor">›</button></div>
+    <div class="cal-wd"><span>Mo</span><span>Di</span><span>Mi</span><span>Do</span><span>Fr</span><span>Sa</span><span>So</span></div>
+    <div class="cal-g">${g}</div>
+    <div class="cal-f"><button type="button" class="btn sm" onclick="calPick()">Heute</button>
+      <span class="hint">${isoToDe(dIso(cal.sel))}</span>
+      <button type="button" class="btn sm primary" onclick="calPick(${cal.sel.getFullYear()},${cal.sel.getMonth()},${cal.sel.getDate()})">Übernehmen</button></div>`;
+  const ye=document.getElementById("calYear");let sx=null,sy=null;
+  ye.addEventListener("touchstart",e=>{sx=e.touches[0].clientX;sy=e.touches[0].clientY;},{passive:true});
+  ye.addEventListener("touchend",e=>{if(sx===null)return;const dx=e.changedTouches[0].clientX-sx,dy=e.changedTouches[0].clientY-sy;sx=null;
+    if(Math.max(Math.abs(dx),Math.abs(dy))<25)return;
+    calYear(Math.abs(dx)>Math.abs(dy)?(dx<0?1:-1):(dy<0?1:-1));});   // nach links/oben = später
+  ye.addEventListener("wheel",e=>{e.preventDefault();calYear(e.deltaY<0?1:-1);},{passive:false});
+}
+function calClamp(d){const t=isoToDate(todayIso());return d>t?t:d;}
+function calMonth(n){
+  const v=cal.view,nv=new Date(v.getFullYear(),v.getMonth()+n,1);
+  if(nv>isoToDate(todayIso()))return;
+  cal.view=nv;
+  const last=new Date(nv.getFullYear(),nv.getMonth()+1,0).getDate();
+  cal.sel=calClamp(new Date(nv.getFullYear(),nv.getMonth(),Math.min(cal.sel.getDate(),last)));
+  renderCal();
+}
+function calYear(n){
+  const v=cal.view;let nv=new Date(v.getFullYear()+n,v.getMonth(),1);
+  const t=isoToDate(todayIso());if(nv>t)nv=new Date(t.getFullYear(),t.getMonth(),1);
+  if(nv.getTime()===v.getTime())return;
+  cal.view=nv;
+  const last=new Date(nv.getFullYear(),nv.getMonth()+1,0).getDate();
+  cal.sel=calClamp(new Date(nv.getFullYear(),nv.getMonth(),Math.min(cal.sel.getDate(),last)));
+  renderCal();
+}
+function calPick(y,m,d){
+  const dt=y===undefined?isoToDate(todayIso()):new Date(y,m,d);
+  if(dt>isoToDate(todayIso()))return;
+  const f=document.getElementById("m_done");if(f)f.value=isoToDe(dIso(dt));
+  closeCal();if(f)f.focus();
+}
+function calKey(e){
+  if(!cal)return;
+  const step={ArrowLeft:-1,ArrowRight:1,ArrowUp:-7,ArrowDown:7}[e.key];
+  if(step){
+    e.preventDefault();
+    const n=new Date(cal.sel.getFullYear(),cal.sel.getMonth(),cal.sel.getDate()+step);
+    if(n>isoToDate(todayIso()))return;
+    cal.sel=n;cal.view=new Date(n.getFullYear(),n.getMonth(),1);renderCal();
+  }else if(e.key==="PageUp"||e.key==="PageDown"){e.preventDefault();e.shiftKey?calYear(e.key==="PageUp"?-1:1):calMonth(e.key==="PageUp"?-1:1);}
+  else if(e.key==="Enter"||e.key===" "){e.preventDefault();calPick(cal.sel.getFullYear(),cal.sel.getMonth(),cal.sel.getDate());}
+}
+document.addEventListener("mousedown",e=>{if(document.getElementById("calPop")&&!e.target.closest("#calPop")&&!e.target.closest(".datef"))closeCal();});
+document.addEventListener("touchstart",e=>{if(document.getElementById("calPop")&&!e.target.closest("#calPop")&&!e.target.closest(".datef"))closeCal();},{passive:true});
+
 // ─── Modal ────────────────────────────────────────────────
 const M=document.getElementById("modalBg");
 M.addEventListener("click",e=>{if(e.target===M)closeM();});
-function closeM(){closeNotePop();_edit=null;M.classList.remove("open");document.getElementById("modal").innerHTML="";}
+function closeM(){closeNotePop();closeCal();_edit=null;M.classList.remove("open");document.getElementById("modal").innerHTML="";}
 function uid(){return "c"+Math.random().toString(36).slice(2,8);}
 let _edit=null;   // geöffnete Karte: {id, exists, snap}
-const EDIT_FIELDS=["m_t","m_note","m_col","m_cat","m_prio","m_sub","m_owner","m_src"];
+const EDIT_FIELDS=["m_t","m_note","m_col","m_cat","m_prio","m_sub","m_owner","m_src","m_done"];
 function editVals(){return JSON.stringify(EDIT_FIELDS.map(i=>{const e=document.getElementById(i);return e?e.value:"";}));}
 function editCard(id,col){
   const c=id?state.cards.find(x=>x.id===id):{id:uid(),col:col||"eingang",cat:filterCat in CATS?filterCat:"b1",sub:filterSub!=="alle"?filterSub:"",owner:"Robert",prio:"Mittel",t:"",note:"",src:"",tools:[]};
@@ -753,9 +923,13 @@ function editCard(id,col){
     <label>Notiz / Nächster Schritt</label>
     <div class="notebox" id="m_notebox" onclick="openNotePop()" title="Antippen zum Bearbeiten"></div>
     <textarea id="m_note" hidden>${esc(c.note)}</textarea>
-    <div class="frow"><div><label>Spalte</label><select id="m_col">${colOpts}</select></div>
+    <div class="frow"><div><label>Spalte</label><select id="m_col" onchange="showDoneRow()">${colOpts}</select></div>
     <div><label>Kategorie</label><select id="m_cat">${catOpts}</select></div>
     <div><label>Priorität</label><select id="m_prio">${prioOpts}</select></div></div>
+    <div id="m_donerow" class="donerow" ${c.col==="erledigt"?"":"hidden"}><label>Erledigt am</label>
+      <div class="datef"><input id="m_done" inputmode="numeric" placeholder="TT.MM.JJJJ" maxlength="10" value="${c.done?isoToDe(c.done):todayDe()}"
+        oninput="fmtDateInput(this)" onkeydown="if(event.key==='ArrowDown'&&event.altKey){event.preventDefault();openCal()}">
+      <button class="btn sm" type="button" onclick="openCal()" title="Kalender öffnen">📅</button></div></div>
     <div class="grid2"><div><label>Unterthema</label><input id="m_sub" list="m_subs" value="${esc(c.sub||'')}"><datalist id="m_subs">${subOpts}</datalist></div>
     <div><label>Zuständig</label><input id="m_owner" value="${esc(c.owner||'')}"></div></div>
     <label>Quelle</label><input id="m_src" value="${esc(c.src||'')}">
@@ -815,7 +989,7 @@ function requestClose(){
 }
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
-  if(closeNotePop()||hideNotePeek()){e.preventDefault();return;}
+  if(closeCal()||closeNotePop()||hideNotePeek()||closeAsk()){e.preventDefault();return;}
   if(M.classList.contains("open")){e.preventDefault();_edit?requestClose():closeM();}
 });
 
@@ -1084,7 +1258,14 @@ async function unlinkDoc(cid,docId){
 function saveCard(cid,exists){
   const g=i=>document.getElementById(i).value;
   const obj={id:cid,col:g("m_col"),cat:g("m_cat"),sub:g("m_sub").trim(),owner:g("m_owner").trim(),prio:g("m_prio"),t:g("m_t").trim()||"Unbenannt",note:g("m_note"),src:g("m_src")};
-  if(exists){const i=state.cards.findIndex(x=>x.id===cid);state.cards[i]={...state.cards[i],...obj};}else state.cards.push({tools:[],...obj});
+  if(obj.col==="erledigt"){
+    const raw=g("m_done").trim(),iso=raw?deToIso(raw):"";
+    if(raw&&!iso){toast("⚠️ Erledigt-Datum bitte als TT.MM.JJJJ eingeben");document.getElementById("m_done").focus();return;}
+    if(iso>todayIso()){toast("⚠️ Das Erledigt-Datum darf nicht in der Zukunft liegen");document.getElementById("m_done").focus();return;}
+    if(iso)obj.done=iso;
+  }
+  if(exists){const i=state.cards.findIndex(x=>x.id===cid);state.cards[i]={...state.cards[i],...obj};if(!obj.done)delete state.cards[i].done;}
+  else state.cards.push({tools:[],...obj});
   save();closeM();render();
 }
 // Perplexity: Frage aus der Karte vorformulieren; Robert kann sie vor dem Absenden ändern

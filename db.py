@@ -1088,9 +1088,18 @@ def update_card(path, card_id, changes, note_append=None, actor="claude"):
                 old = changes.get("note", r["note"] or "")
                 changes["note"] = (old.rstrip() + "\n\n" if old.strip() else "") + note_append.strip()
             before = {k: r[k] for k in changes}
-            sets = ", ".join("%s = ?" % k for k in changes)
+            cols = dict(changes)
+            if "col" in changes and changes["col"] != r["col"]:
+                # Erledigt-Datum: beim Verschieben nach „erledigt“ setzen, beim Herausnehmen entfernen
+                extra = json.loads(r["extra"] or "{}")
+                if changes["col"] == "erledigt":
+                    extra.setdefault("done", time.strftime("%Y-%m-%d", time.localtime(now)))
+                else:
+                    extra.pop("done", None)
+                cols["extra"] = json.dumps(extra, ensure_ascii=False, sort_keys=True)
+            sets = ", ".join("%s = ?" % k for k in cols)
             conn.execute("UPDATE cards SET %s, updated_at = ? WHERE id = ?" % sets,
-                         tuple(changes.values()) + (now, card_id))
+                         tuple(cols.values()) + (now, card_id))
             _next_ts(conn)
             _reindex_cards(conn)
             log_activity(conn, actor, "karte_aendern", {"id": card_id, "vorher": before, "nachher": changes})

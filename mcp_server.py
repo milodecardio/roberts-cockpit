@@ -165,11 +165,14 @@ TOOLS = [
                     "Board filtert sich innerhalb weniger Sekunden auf genau diese Karten, mit deiner "
                     "Überschrift. Nutzen, wenn Robert sagt „zeig mir im Cockpit …“. Entweder karten_ids "
                     "(z. B. aus suchen/karten_auflisten) oder eine suche wie im Cockpit-Suchfeld "
-                    "(z. B. 'Karten Friedberg', 'Karten b1 heute'). leeren=true hebt die Anzeige auf.",
+                    "(z. B. 'Karten Friedberg', 'Karten b1 heute'). Bittet Robert, eine Karte zu öffnen, "
+                    "karte_oeffnen mit ihrer ID setzen – sie öffnet sich dann im Cockpit; bei genau einer "
+                    "Karte geschieht das automatisch. leeren=true hebt die Anzeige auf.",
      "inputSchema": {"type": "object", "properties": {
          "karten_ids": {"type": "array", "items": {"type": "string"}, "description": "IDs der Karten"},
          "suche": _s("Statt IDs: Suchanfrage wie im Cockpit-Suchfeld"),
          "titel": _s("Kurze Überschrift, z. B. 'Bewerbung Friedberg'"),
+         "karte_oeffnen": _s("ID einer Karte, die im Cockpit geöffnet werden soll"),
          "leeren": {"type": "boolean", "default": False, "description": "Anzeige im Cockpit aufheben"}}},
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
                      "openWorldHint": False}},
@@ -190,6 +193,9 @@ def _card_line(c, ndocs=None):
                                       db.COLUMNS.get(c.get("col"), c.get("col")), c.get("prio") or "")
     if c.get("owner") and c["owner"] != "Robert":
         line += " · 👤 " + c["owner"]
+    if c.get("col") == "erledigt" and c.get("done"):
+        y, m, d = (c["done"].split("-") + ["", "", ""])[:3]
+        line += " · erledigt am %s.%s.%s" % (d, m, y)
     if ndocs:
         line += " · 📎%d" % ndocs
     return line
@@ -482,6 +488,9 @@ def t_im_cockpit_anzeigen(ctx, a):
         db.meta_set(ctx.path, "board_view", json.dumps({"ts": time.time(), "clear": True}))
         return "✅ Anzeige im Cockpit aufgehoben."
     ids = [str(x) for x in (a.get("karten_ids") or []) if x]
+    open_id = str(a.get("karte_oeffnen") or "").strip()
+    if open_id and open_id not in ids:
+        ids.append(open_id)
     q = (a.get("suche") or "").strip()
     if not ids and q:
         r = finder.parse(q)
@@ -496,10 +505,14 @@ def t_im_cockpit_anzeigen(ctx, a):
     if not ids:
         raise ToolError("Keine der Karten gefunden: %s" % ", ".join(unknown[:10]))
     title = (a.get("titel") or q or "Auswahl von Claude").strip()[:120]
-    db.meta_set(ctx.path, "board_view", json.dumps({"ts": time.time(), "ids": ids, "title": title},
-                                                   ensure_ascii=False))
+    if open_id not in ids:
+        open_id = ids[0] if len(ids) == 1 else ""
+    db.meta_set(ctx.path, "board_view", json.dumps({"ts": time.time(), "ids": ids, "title": title,
+                                                    "open": open_id}, ensure_ascii=False))
     db.log(ctx.path, "claude", "im_cockpit_anzeigen", {"titel": title, "anzahl": len(ids)})
     out = ["✅ Im Cockpit angezeigt: „%s“ (%d Karten)" % (title, len(ids))]
+    if open_id:
+        out.append("Geöffnet: Karte %s" % open_id)
     out += ["  " + _card_line(cards[i]) for i in ids[:15]]
     if len(ids) > 15:
         out.append("  … und %d weitere" % (len(ids) - 15))

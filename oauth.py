@@ -18,6 +18,7 @@ Verwaltung auf dem Server:
 """
 import base64
 import hashlib
+import hmac
 import html
 import json
 import os
@@ -121,8 +122,36 @@ def _client(path, client_id):
 
 # ─── Anmeldung (Zustimmungsseite) ─────────────────────────────────────
 
-_pending = {}            # nonce → (params, expires)
-_pending_lock = threading.Lock()
+PENDING_TTL = 1800      # Zustimmungsseite: 30 Minuten gültig
+
+
+def _page_secret(path):
+    """Schlüssel zum Signieren der Zustimmungsseite. Liegt in der Datenbank,
+    damit eine offene Anmeldeseite einen Neustart des Servers übersteht."""
+    sec = db.meta_get(path, "oauth_page_secret")
+    if not sec:
+        sec = secrets.token_hex(32)
+        db.meta_set(path, "oauth_page_secret", sec)
+    return sec.encode()
+
+
+def _sign(path, params):
+    body = base64.urlsafe_b64encode(json.dumps(
+        {"p": params, "exp": time.time() + PENDING_TTL}, separators=(",", ":")).encode()).decode().rstrip("=")
+    mac = hmac.new(_page_secret(path), body.encode(), hashlib.sha256).hexdigest()
+    return body + "." + mac
+
+
+def _unsign(path, nonce):
+    body, _, mac = (nonce or "").partition(".")
+    if not body or not hmac.compare_digest(
+            mac, hmac.new(_page_secret(path), body.encode(), hashlib.sha256).hexdigest()):
+        return None
+    try:
+        d = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    except ValueError:
+        return None
+    return d["p"] if d.get("exp", 0) >= time.time() else None
 
 
 class PageError(Exception):
@@ -162,13 +191,8 @@ def _add_query(uri, q):
     return uri + ("&" if "?" in uri else "?") + urllib.parse.urlencode(q)
 
 
-def consent_page(params, client_name):
-    nonce = secrets.token_urlsafe(24)
-    now = time.time()
-    with _pending_lock:
-        for k in [k for k, (_, exp) in _pending.items() if exp < now]:
-            del _pending[k]
-        _pending[nonce] = (params, now + 600)
+def consent_page(path, params, client_name):
+    nonce = _sign(path, params)
     host = urllib.parse.urlsplit(params["redirect_uri"]).netloc
     return PAGE % {
         "client": html.escape(client_name),
@@ -179,12 +203,10 @@ def consent_page(params, client_name):
 
 def decide(path, form):
     """Formular abgeschickt → Ziel-URL für die Weiterleitung."""
-    nonce = form.get("nonce", "")
-    with _pending_lock:
-        item = _pending.pop(nonce, None)
-    if not item or item[1] < time.time():
-        raise PageError("Die Anmeldung ist abgelaufen. Bitte in Claude erneut verbinden.")
-    params = item[0]
+    params = _unsign(path, form.get("nonce", ""))
+    if not params:
+        raise PageError("Diese Anmeldeseite ist abgelaufen (älter als 30 Minuten). "
+                        "Bitte in Claude beim Connector erneut auf „Verbinden“ klicken.")
     if form.get("decision") != "allow":
         return error_redirect(params, OAuthError("access_denied", "Abgelehnt"))
     code = secrets.token_urlsafe(32)

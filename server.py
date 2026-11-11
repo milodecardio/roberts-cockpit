@@ -204,7 +204,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     params = {"redirect_uri": qs.get("redirect_uri"), "state": qs.get("state", "")}
                     self._redirect(oauth.error_redirect(params, e))
                     return
-                self._html(200, oauth.consent_page(params, name))
+                self._html(200, oauth.consent_page(DB_PATH, params, name))
             else:
                 form = {k: v[0] for k, v in urllib.parse.parse_qs(self._read_body(16 * 1024).decode()).items()}
                 self._redirect(oauth.decide(DB_PATH, form))
