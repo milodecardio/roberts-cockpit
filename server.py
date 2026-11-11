@@ -39,6 +39,7 @@ except ImportError:
 import agent_api
 import db
 import embed
+import finder
 import mail
 import mcp_server
 import msgraph
@@ -286,6 +287,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return True
             if method == "POST" and p == "/api/import/file":
                 self._json(200, self._receive_import())
+                return True
+            # ─── Etappe 5: Suchfeld mit Befehlsverständnis, Board-Ansicht von Claude ───
+            if method == "GET" and p == "/api/find":
+                self._json(200, finder.find(McpContext(), qs.get("q", "")))
+                return True
+            if method == "GET" and p == "/api/board-view":
+                raw = db.meta_get(DB_PATH, "board_view")
+                self._json(200, json.loads(raw) if raw else None)
                 return True
             # ─── Etappe 5: Outlook (nur Lesen) ───
             if p.startswith("/api/mail/"):
@@ -706,6 +715,8 @@ def main():
     imported = db.init(DB_PATH, legacy_json=STATE)
     if imported:
         print("Datenbank angelegt, %d Karten aus %s übernommen." % (imported, STATE), flush=True)
+    # Kopfdaten älterer Mails nachtragen (einmalig, im Hintergrund)
+    threading.Thread(target=lambda: mail.backfill_meta(DB_PATH, FILES_DIR), daemon=True).start()
     httpd = ThreadingServer((HOST, PORT), Handler)
     if not PRODUCTION:
         webbrowser.open(URL)

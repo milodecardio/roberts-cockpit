@@ -16,6 +16,7 @@ import re
 import time
 
 import db
+import finder
 import mail
 import msgraph
 
@@ -33,6 +34,7 @@ b5 Pflege Mutter, b6 Privates, b7 Sonstiges, b8 Themen ohne Aufgabe, vision.
 Hinweise: Antworte auf Deutsch. Für Fragen zuerst `suchen` benutzen, dann gezielt
 `dokument_lesen`/`karte_lesen`. Quellen immer mit Dokument- bzw. Karten-ID nennen.
 Mails aus Outlook (nur Lesen) mit `mail_anhaengen` an Karten hängen.
+Sagt Robert „zeig mir im Cockpit …“, die Karten mit `im_cockpit_anzeigen` in sein Board schicken.
 Vor dem Anlegen einer Karte prüfen, ob es schon eine passende gibt. Änderungen an
 Karten nur, wenn Robert darum bittet. B4/B5 enthalten Gesundheitsdaten – sorgsam behandeln."""
 
@@ -158,6 +160,19 @@ TOOLS = [
          "anzahl": _i("Höchstzahl Treffer in der Liste", 8, 1, 25)}},
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
                      "openWorldHint": True}},
+    {"name": "im_cockpit_anzeigen", "title": "Karten im Cockpit anzeigen",
+     "description": "Zeigt Robert eine Auswahl von Karten direkt in seinem Cockpit-Board (Browser/App): das "
+                    "Board filtert sich innerhalb weniger Sekunden auf genau diese Karten, mit deiner "
+                    "Überschrift. Nutzen, wenn Robert sagt „zeig mir im Cockpit …“. Entweder karten_ids "
+                    "(z. B. aus suchen/karten_auflisten) oder eine suche wie im Cockpit-Suchfeld "
+                    "(z. B. 'Karten Friedberg', 'Karten b1 heute'). leeren=true hebt die Anzeige auf.",
+     "inputSchema": {"type": "object", "properties": {
+         "karten_ids": {"type": "array", "items": {"type": "string"}, "description": "IDs der Karten"},
+         "suche": _s("Statt IDs: Suchanfrage wie im Cockpit-Suchfeld"),
+         "titel": _s("Kurze Überschrift, z. B. 'Bewerbung Friedberg'"),
+         "leeren": {"type": "boolean", "default": False, "description": "Anzeige im Cockpit aufheben"}}},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
+                     "openWorldHint": False}},
 ]
 
 
@@ -462,12 +477,43 @@ def t_mail_anhaengen(ctx, a):
                "".join("\n  📎 [Dok %d] %s" % (i, n) for i, n in zip(r["attachments"], att)))
 
 
+def t_im_cockpit_anzeigen(ctx, a):
+    if a.get("leeren"):
+        db.meta_set(ctx.path, "board_view", json.dumps({"ts": time.time(), "clear": True}))
+        return "✅ Anzeige im Cockpit aufgehoben."
+    ids = [str(x) for x in (a.get("karten_ids") or []) if x]
+    q = (a.get("suche") or "").strip()
+    if not ids and q:
+        r = finder.parse(q)
+        if r["mode"] == "docs":
+            raise ToolError("Die Suche liefert keine Karten – bitte nach Karten suchen (z. B. 'Karten …').")
+        ids, _ = finder.find_cards(ctx, r)
+    if not ids:
+        raise ToolError("Keine Karten angegeben oder gefunden.")
+    cards = {c["id"]: c for c in db.list_cards(ctx.path)}
+    unknown = [i for i in ids if i not in cards]
+    ids = [i for i in ids if i in cards][:200]
+    if not ids:
+        raise ToolError("Keine der Karten gefunden: %s" % ", ".join(unknown[:10]))
+    title = (a.get("titel") or q or "Auswahl von Claude").strip()[:120]
+    db.meta_set(ctx.path, "board_view", json.dumps({"ts": time.time(), "ids": ids, "title": title},
+                                                   ensure_ascii=False))
+    db.log(ctx.path, "claude", "im_cockpit_anzeigen", {"titel": title, "anzahl": len(ids)})
+    out = ["✅ Im Cockpit angezeigt: „%s“ (%d Karten)" % (title, len(ids))]
+    out += ["  " + _card_line(cards[i]) for i in ids[:15]]
+    if len(ids) > 15:
+        out.append("  … und %d weitere" % (len(ids) - 15))
+    if unknown:
+        out.append("(Nicht gefunden: %s)" % ", ".join(unknown[:10]))
+    return "\n".join(out)
+
+
 HANDLERS = {
     "cockpit_uebersicht": t_uebersicht, "suchen": t_suchen, "karten_auflisten": t_karten_auflisten,
     "karte_lesen": t_karte_lesen, "dokument_lesen": t_dokument_lesen, "bibliothek": t_bibliothek,
     "karte_anlegen": t_karte_anlegen, "karte_aendern": t_karte_aendern,
     "material_verknuepfen": t_material_verknuepfen, "notiz_anhaengen": t_notiz_anhaengen,
-    "mail_anhaengen": t_mail_anhaengen,
+    "mail_anhaengen": t_mail_anhaengen, "im_cockpit_anzeigen": t_im_cockpit_anzeigen,
 }
 
 

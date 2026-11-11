@@ -100,6 +100,17 @@ Reihenfolge (festgelegt 11.11.2026):
    Karten im Board. Mails gehen denselben Weg wie aus Outlook (Anhänge einzeln, keine Duplikate).
 3. Später: Outlook-Ordner „Cockpit“ automatisch übernehmen und Karten für neue Mails vorschlagen.
 
+Zusätzlich gebaut (11.11.2026):
+- **Suchfeld mit Befehlsverständnis** (`finder.py`, `/api/find`): „Karte Friedberg“, „Mails und Anhänge
+  von Frau Häfner“, „Gib mir alle Karten, die mit … zu tun haben“ (Bedeutung + Wortlaut), „Karten b1 heute“,
+  „… in Outlook“. Kartensuchen filtern das Board, Material-/Mailsuchen zeigen eine Ergebnisliste.
+  Mail-Kopfdaten (Von/An/Datum/Postfach) in Tabelle `mail_meta`.
+- **Claude-Brücke:** 🤖 gibt die Frage an Claude weiter (Handy: Teilen-Menü, Mac: claude.ai);
+  MCP-Werkzeug `im_cockpit_anzeigen` filtert das Board von Claude aus. 🎤 Spracheingabe im Suchfeld.
+- **Bedienung:** Karten auf-/zuklappbar, Suchleiste fest oben, Handy-Ansicht mit Spalten als Zeilen,
+  Notiz-Vorschau bei langem Hovern/Berühren, Karte mit Knöpfen im Kopf, ✕ und Esc mit Speichern-Nachfrage.
+- Offen: weitere Postfächer (gitarre@, tenor@, ebay@robert-beckert.de, Gmail), Android-Hülle.
+
 Ursprüngliche Idee:
 - **OneDrive + Outlook:** über Microsoft Graph (App-Registrierung im Microsoft-365-Konto).
   Z. B. ein OneDrive-Ordner „Cockpit“ und eine Outlook-Kategorie/Ordner „Cockpit“.

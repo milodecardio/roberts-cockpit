@@ -19,7 +19,7 @@ import threading
 import time
 
 CORE = ("col", "cat", "prio", "t", "note", "src", "sub", "owner")
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Gültige Werte (wie im Frontend: COLS, CATS, PRIOS)
 COLUMNS = {"eingang": "📥 Eingang", "heute": "🔴 Heute / Dringend", "woche": "🟢 Diese Woche",
@@ -128,6 +128,19 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     last_used  REAL
 );
 CREATE INDEX IF NOT EXISTS oauth_tokens_grant ON oauth_tokens (grant_id);
+-- Etappe 5: Kopfdaten von Mails (für „Mails von …“); Anhänge zeigen auf ihre Mail
+CREATE TABLE IF NOT EXISTS mail_meta (
+    doc_id      INTEGER PRIMARY KEY REFERENCES documents (id),
+    mail_doc_id INTEGER NOT NULL,
+    message_id  TEXT,
+    subject     TEXT,
+    from_name   TEXT,
+    from_addr   TEXT,
+    to_addrs    TEXT,
+    date        REAL,
+    mailbox     TEXT
+);
+CREATE INDEX IF NOT EXISTS mail_meta_mail ON mail_meta (mail_doc_id);
 CREATE TABLE IF NOT EXISTS activity (
     id     INTEGER PRIMARY KEY,
     ts     REAL NOT NULL,
@@ -585,9 +598,12 @@ def attach_doc(path, card_id, doc_id):
 
 # ─── Bibliothek & Import (Etappe 3) ───────────────────────────────────
 
-def library(path, q="", origin="", status="", limit=100, offset=0, folder="", unlinked=False):
+def library(path, q="", origin="", status="", limit=100, offset=0, folder="", unlinked=False, kinds=None):
     where = ["d.deleted_at IS NULL"]
     args = []
+    if kinds:
+        where.append("d.kind IN (%s)" % ",".join("?" * len(kinds)))
+        args.extend(kinds)
     if folder:
         where.append("instr(lower(coalesce(d.origin_path, '')), lower(?)) > 0")
         args.append(folder)
@@ -695,6 +711,70 @@ def add_import_doc(path, source, ref, mtime, size, filename, mime, sha256, origi
             raise
         finally:
             conn.close()
+
+
+def set_mail_meta(path, rows):
+    """rows: dicts mit doc_id, mail_doc_id, message_id, subject, from_name, from_addr, to_addrs, date, mailbox."""
+    cols = ("doc_id", "mail_doc_id", "message_id", "subject", "from_name", "from_addr", "to_addrs", "date", "mailbox")
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            conn.executemany(
+                "INSERT INTO mail_meta (%s) VALUES (%s) ON CONFLICT(doc_id) DO UPDATE SET %s" % (
+                    ", ".join(cols), ", ".join("?" * len(cols)),
+                    ", ".join("%s = excluded.%s" % (c, c) for c in cols[1:])),
+                [tuple(r.get(c) for c in cols) for r in rows])
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def mail_meta_rows(path):
+    """Alle Mail-Kopfdaten lebender Dokumente (klein genug für Filter in Python)."""
+    conn = _connect(path)
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT m.* FROM mail_meta m JOIN documents d ON d.id = m.doc_id WHERE d.deleted_at IS NULL")]
+    finally:
+        conn.close()
+
+
+def mails_without_meta(path):
+    conn = _connect(path)
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT s.ref, d.id, d.sha256, d.filename, d.origin_path FROM sources s "
+            "JOIN documents d ON d.id = s.doc_id WHERE s.source = 'mail' "
+            "AND NOT EXISTS (SELECT 1 FROM mail_meta m WHERE m.doc_id = d.id)")]
+    finally:
+        conn.close()
+
+
+def fts_doc_ids(path, q, limit=1000):
+    fq = _fts_query(q)
+    if not fq:
+        return set()
+    conn = _connect(path)
+    try:
+        return {int(r[0]) for r in conn.execute(
+            "SELECT ref FROM search WHERE kind = 'doc' AND search MATCH ? LIMIT ?", (fq, limit))}
+    finally:
+        conn.close()
+
+
+def card_ids_for_docs(path, doc_ids):
+    if not doc_ids:
+        return {}
+    conn = _connect(path)
+    try:
+        out = {}
+        q = ("SELECT cd.doc_id, cd.card_id FROM card_documents cd JOIN cards c ON c.id = cd.card_id "
+             "WHERE c.deleted_at IS NULL AND cd.doc_id IN (%s)" % ",".join("?" * len(doc_ids)))
+        for r in conn.execute(q, list(doc_ids)):
+            out.setdefault(r[0], []).append(r[1])
+        return out
+    finally:
+        conn.close()
 
 
 def source_docs(path, source, ref):

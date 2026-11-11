@@ -94,6 +94,13 @@ def msg_to_eml(raw):
     return None
 
 
+def _addr_list(msg, *headers):
+    vals = []
+    for h in headers:
+        vals += [str(v) for v in msg.get_all(h, [])]
+    return ", ".join(a for _, a in email.utils.getaddresses(vals) if a)
+
+
 def _header_info(msg):
     subject = str(msg.get("Subject", "") or "").strip() or "(ohne Betreff)"
     name, addr = email.utils.parseaddr(str(msg.get("From", "") or ""))
@@ -157,7 +164,7 @@ def _link_existing(path, card_id, mid, actor):
 
 
 def import_raw(path, files_dir, raw, card_id=None, filename=None, mime=None, origin_path=None,
-               actor="robert", ref=None):
+               actor="robert", ref=None, mailbox=None):
     """Mail (als .eml- oder .msg-Bytes) übernehmen. Gibt Zusammenfassung zurück."""
     if card_id:
         db.get_card(path, card_id)   # wirft NotFound, bevor etwas gespeichert wird
@@ -191,6 +198,11 @@ def import_raw(path, files_dir, raw, card_id=None, filename=None, mime=None, ori
                               "E-Mail: %s (%s)" % (subject, sender))
         att_ids.append(r["id"])
         att_names.append(name)
+    name, _ = email.utils.parseaddr(str(msg.get("From", "") or ""))
+    meta = {"mail_doc_id": main, "message_id": mid, "subject": subject, "from_name": name or None,
+            "from_addr": (addr or "").lower() or None, "to_addrs": _addr_list(msg, "To", "Cc").lower() or None,
+            "date": ts, "mailbox": mailbox or ("hochgeladen" if not ref else None)}
+    db.set_mail_meta(path, [dict(meta, doc_id=d) for d in [main] + att_ids])
     if card_id:
         for did in [main] + att_ids:
             db.attach_doc(path, card_id, did)
@@ -266,5 +278,33 @@ def import_graph(path, files_dir, message_id, card_id=None, actor="robert"):
             return done
     raw = msgraph.get_bytes(path, "/me/messages/%s/$value" % q, max_bytes=MAX_MAIL)
     folder = _folder_name(path, meta.get("parentFolderId"))
+    account = (msgraph.status(path).get("account") or "Outlook")
     return import_raw(path, files_dir, raw, card_id=card_id, filename="mail.eml",
-                      origin_path="Outlook" + ("/" + folder if folder else ""), actor=actor, ref=mid or None)
+                      origin_path="Outlook" + ("/" + folder if folder else ""), actor=actor, ref=mid or None,
+                      mailbox=account)
+
+
+def backfill_meta(path, files_dir):
+    """Kopfdaten für Mails nachtragen, die vor Einführung von mail_meta übernommen wurden."""
+    n = 0
+    for r in db.mails_without_meta(path):
+        try:
+            with open(os.path.join(files_dir, r["sha256"][:2], r["sha256"][2:4], r["sha256"]), "rb") as f:
+                raw = f.read()
+            eml = msg_to_eml(raw) if (r["filename"] or "").lower().endswith(".msg") else raw
+            if eml is None:
+                continue
+            msg = email.message_from_bytes(eml, policy=email.policy.default)
+            subject, sender, addr, ts = _header_info(msg)
+            name, _ = email.utils.parseaddr(str(msg.get("From", "") or ""))
+            atts = db.source_docs_prefix(path, SOURCE_ATT, r["ref"] + "#")
+            op = r["origin_path"] or ""
+            meta = {"mail_doc_id": r["id"], "message_id": r["ref"], "subject": subject, "from_name": name or None,
+                    "from_addr": (addr or "").lower() or None, "to_addrs": _addr_list(msg, "To", "Cc").lower() or None,
+                    "date": ts, "mailbox": (msgraph.status(path).get("account") or "Outlook")
+                    if op.startswith("Outlook") else "hochgeladen"}
+            db.set_mail_meta(path, [dict(meta, doc_id=d) for d in [r["id"]] + atts])
+            n += 1
+        except Exception:  # noqa: BLE001 – eine kaputte Mail soll den Rest nicht aufhalten
+            continue
+    return n

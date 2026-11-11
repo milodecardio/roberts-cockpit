@@ -162,6 +162,40 @@
   .doc-form .btn{white-space:nowrap}
   .col h2 .tg{display:none}
   .chips{display:contents}
+  .interp{font-size:12.5px;color:var(--mut);margin:-4px 0 10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .interp b{color:var(--txt)}
+  .interp .cl,.results .cl{color:var(--acc);cursor:pointer}
+  .interp.cv{background:var(--panel);border:1px solid var(--acc2);border-radius:10px;padding:8px 12px;margin:0 0 12px;color:var(--txt)}
+  .results{max-width:1000px;margin-bottom:14px}
+  .results h4.rg{font-size:13px;color:var(--mut);margin:12px 0 6px}
+  .card .note{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  @media(hover:none){.card .note{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}}
+  .notepeek{position:fixed;z-index:120;background:var(--panel);border:1px solid var(--acc);border-radius:12px;padding:10px 12px;box-shadow:0 10px 30px rgba(0,0,0,.45);max-height:55vh;overflow:auto}
+  .notepeek .pk-t{font-weight:650;font-size:13px;margin-bottom:6px}
+  .notepeek .pk-b{font-size:13.5px;white-space:pre-wrap}
+  /* Geöffnete Karte */
+  .mhead{display:flex;align-items:center;gap:8px;position:sticky;top:0;background:var(--panel);margin:-20px -20px 8px;padding:14px 16px 10px 20px;border-bottom:1px solid var(--line);z-index:2;border-radius:16px 16px 0 0}
+  .mhead h3{margin:0;flex:1}
+  .mh-act{display:flex;gap:6px;align-items:center}
+  .xclose{background:none;border:1px solid var(--line);color:var(--mut);border-radius:8px;width:30px;height:30px;font-size:15px;cursor:pointer;flex-shrink:0}
+  .xclose:hover{color:var(--txt);border-color:var(--acc)}
+  .notebox{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;white-space:pre-wrap;max-height:4.6em;overflow:hidden;cursor:text;position:relative}
+  .notebox:hover{border-color:var(--acc)}
+  .notebox .ph{color:var(--mut)}
+  .notepop-ed{position:fixed;inset:0;background:rgba(5,7,15,.55);z-index:150;display:flex;align-items:center;justify-content:center;padding:16px}
+  .notepop-ed .np-in{background:var(--panel);border:1px solid var(--acc);border-radius:14px;width:100%;max-width:640px;padding:12px;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 32px)}
+  .notepop-ed .np-h{display:flex;gap:10px;align-items:center}
+  .notepop-ed .np-h b{flex:1}
+  .notepop-ed textarea{min-height:45vh;max-height:70vh;overflow:auto;font-size:15px;line-height:1.5}
+  details.lst{margin:6px 0}
+  details.lst summary{cursor:pointer;font-size:13px;color:var(--mut);font-weight:600;padding:4px 0;list-style:none}
+  details.lst summary::-webkit-details-marker{display:none}
+  details.lst summary::before{content:"▸ ";color:var(--mut)}
+  details.lst[open] summary::before{content:"▾ "}
+  details.lst summary .n{font-weight:400}
+  .simcard{cursor:pointer}.simcard:hover{border-color:var(--acc)}
+  .rel h4{display:none}
+  @media(max-width:520px){.mh-act .hl{display:none}}
   @media(max-width:760px){
     header{padding:8px 12px}header .sub{display:none}
     nav{padding:5px 12px}
@@ -368,8 +402,8 @@ function renderFilters(){
   let html=`<div class="chips"><span class="chip ${filterCat==='alle'?'active':''}" onclick="setFilter('alle')">Alle</span>`;
   for(const k in CATS) html+=`<span class="chip ${filterCat===k?'active':''}" onclick="setFilter('${k}')"><span class="d" style="background:${CATS[k][1]}"></span>${CATS[k][0]}</span>`;
   html+=`</div>`;
-  html+=`<input id="search" placeholder="🔍 Karten & Materialien suchen…" value="${esc(searchQ)}" oninput="searchQ=this.value;render();serverSearch()">`;
-  html+=`<span class="viewbar"><button class="btn sm" onclick="setAllCards(${!ui.allClosed})" title="Alle Karten auf- bzw. zuklappen">${ui.allClosed?"▾ Alle auf":"▸ Alle zu"}</button></span>`;
+  html+=`<input id="search" placeholder="🔍 z. B. „Karte Friedberg“ oder „Mails von Häfner“" value="${esc(searchQ)}" oninput="searchQ=this.value;claudeView=null;render();serverSearch()">`;
+  html+=`<span class="viewbar">${SpeechRec?`<button class="btn sm" onclick="dictate()" title="Spracheingabe">🎤</button>`:""}<button class="btn sm" onclick="askClaude()" title="Frage an Claude weitergeben">🤖</button><button class="btn sm" onclick="setAllCards(${!ui.allClosed})" title="Alle Karten auf- bzw. zuklappen">${ui.allClosed?"▾ Alle auf":"▸ Alle zu"}</button></span>`;
   const subs=[...new Set(state.cards.filter(c=>c.cat===filterCat&&c.sub).map(c=>c.sub))].sort((a,b)=>a.localeCompare(b,"de",{numeric:true}));
   if(subs.length){
     html+=`<div class="subfilters"><span class="chip ${filterSub==='alle'?'active':''}" onclick="setSub('alle')">Alle Unterthemen</span>`;
@@ -388,83 +422,147 @@ function render(){
   if(activeView==="board")setTimeout(()=>{const s=document.getElementById("search");if(s&&searchQ){s.focus();s.setSelectionRange(s.value.length,s.value.length);}},0);
 }
 function visible(c){
+  if(claudeView)return claudeView.ids.has(c.id);
   if(filterCat!=="alle"&&c.cat!==filterCat)return false;
   if(filterSub!=="alle"&&c.sub!==filterSub)return false;
-  if(searchQ){
-    if(srv.q===searchQ.trim()&&srv.cards.has(c.id))return true; // Treffer über Materialien/Server-Suche
-    const q=searchQ.toLowerCase();return(c.t+" "+(c.note||"")+" "+(c.src||"")+" "+(c.sub||"")+" "+(c.owner||"")).toLowerCase().includes(q);
+  const q=searchQ.trim();
+  if(q){
+    if(fnd.q===q&&fnd.interp)return !!(fnd.cards&&fnd.cards.has(c.id));
+    // bis der Server antwortet: einfacher Wortfilter
+    const ql=q.toLowerCase();return(c.t+" "+(c.note||"")+" "+(c.src||"")+" "+(c.sub||"")+" "+(c.owner||"")).toLowerCase().includes(ql);
   }
   return true;
 }
 
-// ─── Server-Suche & Materialien (Etappe 2) ───────────────
-let srv={q:"",cards:new Set(),docs:[]},_srvT=null,docCounts={};
+// ─── Suche mit Befehlsverständnis (Etappe 5) ─────────────
+// "Karte Friedberg", "Mails und Anhänge von Frau Häfner", "Gib mir alle Karten, die mit … zu tun haben"
+let fnd={q:"",interp:null,cards:null,why:{},docs:[]},_srvT=null,docCounts={},olRes=null;
 function serverSearch(){
-  clearTimeout(_srvT);
+  clearTimeout(_srvT);olRes=null;
   const q=searchQ.trim();
-  if(!q){srv={q:"",cards:new Set(),docs:[]};sem={q:"",cards:[],docs:[]};return;}
+  if(!q){fnd={q:"",interp:null,cards:null,why:{},docs:[]};return;}
   _srvT=setTimeout(async()=>{
     try{
-      const r=await fetch('/api/search?q='+encodeURIComponent(q));
+      const r=await fetch('/api/find?q='+encodeURIComponent(q));
       if(!r.ok)return;
       const d=await r.json();
       if(searchQ.trim()!==q)return;
-      srv={q,cards:new Set(d.cards),docs:d.docs};
+      fnd={q,interp:d.interp,cards:d.cards?new Set(d.cards):null,why:d.why||{},docs:d.docs||[]};
       render();
     }catch(e){}
-    // Bedeutungssuche (bge-m3) – etwas langsamer, kommt hinterher
-    try{
-      const r=await fetch('/api/semantic?q='+encodeURIComponent(q));
-      if(!r.ok)return;
-      const d=await r.json();
-      if(searchQ.trim()!==q||!d.available)return;
-      sem={q,cards:d.cards,docs:d.docs};
-      render();
-    }catch(e){}
-  },400);
+  },350);
 }
-let sem={q:"",cards:[],docs:[]};
-function semHTML(){
-  if(!searchQ.trim()||sem.q!==searchQ.trim())return"";
-  const seenDocs=new Set(srv.docs.map(d=>d.id));
-  const docs=sem.docs.filter(d=>!seenDocs.has(d.id)&&d.score>=0.40).slice(0,8);
-  const cards=sem.cards.filter(c=>c.score>=0.45).map(c=>state.cards.find(x=>x.id===c.id)).filter(Boolean).slice(0,6);
-  if(!docs.length&&!cards.length)return"";
-  return `<div class="hits" style="border-left-color:var(--acc2)"><h4>🧠 Ähnliche Bedeutung</h4>
-    ${cards.length?`<div class="hit"><span class="s">Karten:</span> ${cards.map(c=>`<span class="cl" onclick="editCard('${c.id}')">${esc(c.t)}</span>`).join(" · ")}</div>`:""}
-    ${docs.map(d=>{const cs=d.cards.map(id=>state.cards.find(c=>c.id===id)).filter(Boolean);
-      return `<div class="hit">${d.kind==="file"?fileIcon(d.mime):DOC_IC[d.kind]} ${docLink(d)}
-        <div class="s">${esc(d.snippet)}</div>
-        <div>${cs.map(c=>`<span class="cl" onclick="editCard('${c.id}')">→ ${esc(c.t)}</span>`).join(" · ")}
-        <span class="cl" onclick="pickCard(${d.id})">＋ an Karte hängen</span></div></div>`;}).join("")}
-  </div>`;
-}
+function clearSearch(){searchQ="";fnd={q:"",interp:null,cards:null,why:{},docs:[]};olRes=null;render();}
 async function loadDocCounts(){
   try{const r=await fetch('/api/doc-counts');if(r.ok){docCounts=await r.json();if(activeView==="board")render();}}catch(e){}
 }
-function hitBar(){
+function interpLine(){
+  if(claudeView)return `<div class="interp cv">🤖 Von Claude: <b>${esc(claudeView.title)}</b> · ${claudeView.ids.size} Karten
+    <span class="cl" onclick="claudeView=null;render()">✕ Anzeige aufheben</span></div>`;
   const q=searchQ.trim();if(!q)return"";
-  const nd=srv.q===q?srv.docs.length:0;
-  const seen=new Set(srv.docs.map(d=>d.id));
-  const ns=sem.q===q?sem.docs.filter(d=>!seen.has(d.id)&&d.score>=0.40).slice(0,8).length:0;
-  if(!nd&&!ns)return"";
-  return `<div class="hitbar">${nd?`<span>📎 ${nd} Treffer in Materialien</span>`:""}${ns?`<span>🧠 ${ns} ähnliche</span>`:""}
+  if(fnd.q!==q||!fnd.interp)return `<div class="interp">🔎 sucht…</div>`;
+  const it=fnd.interp,nc=fnd.cards?fnd.cards.size:0,nd=fnd.docs.length;
+  const counts=[it.mode!=="docs"?`${nc} Karte${nc===1?"":"n"}`:"",it.mode!=="cards"&&(nd||it.mode==="docs")?`${nd} Material${nd===1?"":"ien"}`:""].filter(Boolean).join(" · ");
+  return `<div class="interp">🔎 ${esc(it.label)} · <b>${counts}</b>
+    ${it.outlook_query?`<span class="cl" onclick="outlookFind()">✉️ in Outlook suchen</span>`:""}
+    <span class="cl" onclick="clearSearch()">✕</span></div>`;
+}
+function hitBar(){
+  const q=searchQ.trim();
+  if(!q||fnd.q!==q||!fnd.interp||fnd.interp.mode==="docs"||!fnd.docs.length)return"";
+  return `<div class="hitbar"><span>📎 ${fnd.docs.length} Treffer in Materialien</span>
     <span class="cl" onclick="ui.hits=!ui.hits;keepUi();render()">${ui.hits?"ausblenden":"anzeigen"}</span></div>`;
 }
-function hitsHTML(){
-  if(!searchQ.trim()||srv.q!==searchQ.trim()||!srv.docs.length)return"";
-  const mark=s=>esc(s||"").replace(/\u0002/g,"<mark>").replace(/\u0003/g,"</mark>");
-  return `<div class="hits"><h4>📎 Treffer in Materialien (${srv.docs.length})</h4>${srv.docs.map(d=>{
-    const cards=d.cards.map(id=>state.cards.find(c=>c.id===id)).filter(Boolean);
-    return `<div class="hit">${DOC_IC[d.kind]||"📄"} ${docLink(d)}
-      ${d.snippet?`<div class="s">${mark(d.snippet)}</div>`:""}
-      <div>${cards.map(c=>`<span class="cl" onclick="editCard('${c.id}')">→ ${esc(c.t)}</span>`).join(" · ")}</div></div>`;
-  }).join("")}</div>`;
+const DOC_GROUPS=[["mail","✉️ Mails"],["attachment","📎 Anhänge"],["file","📄 Dateien"],["note","📝 Notizen"],["link","🔗 Links"]];
+function docGroup(d){return d.mail?(d.mail.is_attachment?"attachment":"mail"):d.kind;}
+function fmtDate(ts){return ts?new Date(ts*1000).toLocaleDateString("de-DE"):"";}
+function docRow(d){
+  const cs=(d.cards||[]).map(id=>state.cards.find(c=>c.id===id)).filter(Boolean);
+  const m=d.mail;
+  const meta=m?(m.is_attachment?`aus Mail „${esc(m.subject||"")}“ · ${esc(m.from||"")} · ${fmtDate(m.date)}`
+                 :`${esc(m.from||"")}${m.from_addr&&m.from!==m.from_addr?" &lt;"+esc(m.from_addr)+"&gt;":""} · ${fmtDate(m.date)}${m.mailbox?" · "+esc(m.mailbox):""}`)
+              :`${d.origin_path?esc(d.origin_path)+" · ":""}${fmtDate(d.created_at)}`;
+  return `<div class="doc"><span class="ic">${d.kind==="file"?(m&&!m.is_attachment?"✉️":fileIcon(d.mime)):DOC_IC[d.kind]}</span>
+    <div class="bd">${docLink(d)}${d.why&&d.why.startsWith("bedeutung")?` <span class="st">🧠</span>`:""}<div class="m">${meta}</div>
+      <div class="m">${cs.map(c=>`<span class="cl" onclick="editCard('${c.id}')">→ ${esc(c.t)}</span>`).join(" · ")}
+      <span class="cl" onclick="pickCard(${d.id})">＋ an Karte hängen</span></div></div></div>`;
+}
+function docResultsHTML(docs){
+  if(!docs.length)return `<div class="hint" style="margin:8px 0">Keine Materialien gefunden.</div>`;
+  return DOC_GROUPS.map(([g,l])=>{const ds=docs.filter(d=>docGroup(d)===g);
+    return ds.length?`<h4 class="rg">${l} (${ds.length})</h4>${ds.map(docRow).join("")}`:"";}).join("");
+}
+function outlookHTML(){
+  if(!olRes)return"";
+  if(olRes.loading)return `<h4 class="rg">✉️ In Outlook</h4><div class="hint">sucht in Outlook…</div>`;
+  if(olRes.error)return `<h4 class="rg">✉️ In Outlook</h4><div class="hint">⚠️ ${esc(olRes.error)}</div>`;
+  window._mails=olRes.items;
+  return `<h4 class="rg">✉️ In Outlook (${olRes.items.length})</h4>`+(olRes.items.map((m,i)=>`<div class="doc"><span class="ic">✉️</span><div class="bd">
+      <b>${esc(m.subject)}</b>${m.has_attachments?" 📎":""}<div class="m">${esc(m.from)} · ${m.date?new Date(m.date).toLocaleDateString("de-DE"):""}${m.imported?" · schon im Cockpit":""}</div>
+      <div class="m">${esc(m.preview)}</div>
+      <div class="m"><span class="cl" onclick="pickTarget(cid=>mailToCard(cid,${i}))">＋ an Karte hängen</span></div></div></div>`).join("")||`<div class="hint">Keine Mail gefunden.</div>`);
+}
+async function outlookFind(){
+  const q=fnd.interp&&fnd.interp.outlook_query;if(!q)return;
+  olRes={loading:true};render();
+  try{const r=await fetch("/api/mail/search?"+new URLSearchParams({q,n:25}));const d=await r.json();
+    olRes=r.ok?{items:d}:{error:d.error||"Fehler"};}catch(e){olRes={error:"Keine Verbindung zum Server"};}
+  render();
+}
+async function mailToCard(cid,i){
+  const m=(window._mails||[])[i];if(!m)return;
+  try{const r=await fetch(`/api/cards/${encodeURIComponent(cid)}/mail`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message_id:m.id})});
+    const d=await r.json();closeM();
+    if(!r.ok){toast("⚠️ "+(d.error||"Fehler"));return;}
+    m.imported=true;toast(d.already?"✉️ Mail war schon da – verknüpft":"✉️ Mail übernommen");loadDocCounts();serverSearch();
+  }catch(e){toast("⚠️ Keine Verbindung zum Server");}
+}
+
+// ─── Claude: Fragen weitergeben, Board-Anzeige empfangen ─────
+let claudeView=null;
+async function checkBoardView(){
+  try{
+    const r=await fetch('/api/board-view');if(!r.ok)return;
+    const v=await r.json();if(!v||!v.ts||v.ts<=(ui.claudeTs||0))return;
+    ui.claudeTs=v.ts;keepUi();
+    if(Date.now()/1000-v.ts>600)return;   // ältere Anzeigen nicht wieder aufleben lassen
+    if(v.clear){claudeView=null;render();return;}
+    claudeView={ids:new Set(v.ids||[]),title:v.title||"Auswahl von Claude"};
+    searchQ="";fnd={q:"",interp:null,cards:null,why:{},docs:[]};
+    if(activeView!=="board"){activeView="board";renderNav();}
+    closeNotePop();hideNotePeek();render();toast("🤖 Claude zeigt: "+claudeView.title);
+  }catch(e){}
+}
+setInterval(()=>{if(document.visibilityState==="visible")checkBoardView();},5000);
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")checkBoardView();});
+function askClaude(){
+  const f=document.getElementById("search");
+  let q=((f&&f.value)||"").trim()||(prompt("Frage an Claude:")||"").trim();
+  if(!q)return;
+  const text=q+"\n\n(Bitte über meinen Connector „Roberts Cockpit“ beantworten; passende Karten gern mit im_cockpit_anzeigen im Cockpit zeigen.)";
+  try{navigator.clipboard&&navigator.clipboard.writeText(text).catch(()=>{});}catch(e){}
+  if(navigator.share&&window.matchMedia("(hover:none)").matches){
+    navigator.share({text}).catch(()=>{});   // Teilen-Menü → Claude wählen
+  }else{
+    window.open("https://claude.ai/new?q="+encodeURIComponent(text),"_blank","noopener");
+  }
+  toast("🤖 Frage an Claude übergeben (auch in der Zwischenablage)");
+}
+const SpeechRec=window.SpeechRecognition||window.webkitSpeechRecognition;
+function dictate(){
+  if(!SpeechRec)return;
+  const r=new SpeechRec();r.lang="de-DE";r.interimResults=false;r.maxAlternatives=1;
+  r.onresult=e=>{const t=e.results[0][0].transcript.trim();if(!t)return;searchQ=t;claudeView=null;render();serverSearch();};
+  r.onerror=e=>toast("🎤 "+(e.error==="not-allowed"?"Mikrofon nicht erlaubt":"Spracheingabe nicht möglich"));
+  try{r.start();toast("🎤 Sprich jetzt …");}catch(e){}
 }
 
 // ─── Board ───────────────────────────────────────────────
 function renderBoard(){
-  let html=`<div class="banner">Neue Aufgaben landen im <b>📥 Eingang</b> – von dort per Drag&Drop einsortieren. Bereich wählen, dann nach <b>Unterthema</b> filtern. <b>⇅ Prio / ⇅ Kat</b> sortiert die Spalte. Karte anklicken → unten <b>📎 Materialien</b>: Dateien, Fotos, Links und Notizen anhängen. Die Suche findet auch Inhalte in Materialien. Titel antippen klappt eine Karte auf/zu, ✎ öffnet sie.</div>${hitBar()}${ui.hits?hitsHTML()+semHTML():""}<div class="board">`;
+  let html=`<div class="banner">Neue Aufgaben landen im <b>📥 Eingang</b> – von dort per Drag&Drop einsortieren. Bereich wählen, dann nach <b>Unterthema</b> filtern. <b>⇅ Prio / ⇅ Kat</b> sortiert die Spalte. Karte anklicken → unten <b>📎 Materialien</b>: Dateien, Fotos, Links und Notizen anhängen. Die Suche findet auch Inhalte in Materialien. Titel antippen klappt eine Karte auf/zu, ✎ öffnet sie.</div>${interpLine()}${hitBar()}${ui.hits&&fnd.interp&&fnd.interp.mode!=="docs"?`<div class="results">${docResultsHTML(fnd.docs)}</div>`:""}`;
+  if(!claudeView&&fnd.interp&&fnd.q===searchQ.trim()&&fnd.interp.mode==="docs")
+    return html+`<div class="results">${outlookHTML()}${docResultsHTML(fnd.docs)}</div>`;
+  html+=`${olRes?`<div class="results">${outlookHTML()}</div>`:""}<div class="board">`;
   for(const [id,label] of COLS){
     const cards=state.cards.filter(c=>c.col===id&&visible(c));
     html+=`<div class="col ${id} ${colClosed(id)?"closed":""}"
@@ -495,15 +593,43 @@ function cardHTML(c){
     ondragover="onDragOver(event,'${c.id}')"
     ondragleave="this.classList.remove('drag-over')"
     ondrop="onDropCard(event,'${c.id}')"
-    onclick="editCard('${c.id}')">
+    onclick="cardClick('${c.id}')">
     <div class="t" onclick="toggleCard(event,'${c.id}')" title="Auf-/zuklappen"><span class="tw">${closed?"▸":"▾"}</span><span class="tt">${esc(c.t)}</span>
       <button class="ed" title="Karte öffnen/bearbeiten" onclick="event.stopPropagation();editCard('${c.id}')">✎</button></div>
     <div class="meta"><span class="tag" style="background:${hexa(cat[1])};color:${cat[1]}">${cat[0]}</span><span class="prio ${c.prio}">${c.prio}</span>${c.owner&&c.owner!=="Robert"?`<span class="owner">👤 ${esc(c.owner)}</span>`:""}${docCounts[c.id]?`<span class="att">📎 ${docCounts[c.id]}</span>`:""}</div>
     ${c.sub?`<div class="sub-t">${esc(c.sub)}</div>`:""}
-    ${c.note?`<div class="note">${esc(c.note)}</div>`:""}
+    ${c.note?`<div class="note" onmouseenter="peekHover(this,'${c.id}')" onmouseleave="peekLeave()"
+      ontouchstart="peekTouch(event,this,'${c.id}')" ontouchend="peekTouchEnd()" ontouchmove="peekTouchEnd()"
+      oncontextmenu="if(_peekShown)event.preventDefault()">${esc(c.note)}</div>`:""}
     ${c.src?`<div class="src">${esc(c.src)}</div>`:""}
   </div>`;
 }
+
+// Notiz-Vorschau: am Computer längeres Hovern, am Handy längeres Berühren → Sprechblase mit ganzem Inhalt
+let _peekT=null,_peekShown=false,_peekSuppress=false;
+function cardClick(id){if(_peekSuppress){_peekSuppress=false;return;}editCard(id);}
+function showNotePeek(el,id){
+  const c=state.cards.find(x=>x.id===id);if(!c||!c.note)return;
+  hideNotePeek();
+  const p=document.createElement("div");p.id="notePeek";p.className="notepeek";
+  p.innerHTML=`<div class="pk-t">${esc(c.t)}</div><div class="pk-b">${esc(c.note)}</div>`;
+  p.addEventListener("mouseenter",()=>clearTimeout(_peekT));
+  p.addEventListener("mouseleave",()=>peekLeave());
+  document.body.appendChild(p);
+  const r=el.getBoundingClientRect(),w=Math.min(420,window.innerWidth-24);
+  p.style.width=w+"px";
+  p.style.left=Math.max(12,Math.min(r.left,window.innerWidth-w-12))+"px";
+  const below=r.bottom+8,h=p.offsetHeight;
+  p.style.top=(below+h<window.innerHeight-12?below:Math.max(12,r.top-h-8))+"px";
+  _peekShown=true;
+}
+function hideNotePeek(){const p=document.getElementById("notePeek");_peekShown=false;if(p){p.remove();return true;}return false;}
+function peekHover(el,id){if(window.matchMedia("(hover:none)").matches)return;clearTimeout(_peekT);_peekT=setTimeout(()=>showNotePeek(el,id),700);}
+function peekLeave(){clearTimeout(_peekT);_peekT=setTimeout(hideNotePeek,250);}
+function peekTouch(e,el,id){clearTimeout(_peekT);_peekT=setTimeout(()=>{showNotePeek(el,id);_peekSuppress=true;},550);}
+function peekTouchEnd(){clearTimeout(_peekT);}
+document.addEventListener("touchstart",e=>{if(_peekShown&&!e.target.closest("#notePeek"))setTimeout(hideNotePeek,0);},{passive:true});
+document.addEventListener("scroll",e=>{if(_peekShown&&!(e.target&&e.target.closest&&e.target.closest("#notePeek"))&&!window.matchMedia("(hover:none)").matches)hideNotePeek();},true);
 
 function hexa(v){
   const m=/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(v);
@@ -604,17 +730,29 @@ function toast(msg){const el=document.getElementById("toast");el.textContent=msg
 // ─── Modal ────────────────────────────────────────────────
 const M=document.getElementById("modalBg");
 M.addEventListener("click",e=>{if(e.target===M)closeM();});
-function closeM(){M.classList.remove("open");document.getElementById("modal").innerHTML="";}
+function closeM(){closeNotePop();_edit=null;M.classList.remove("open");document.getElementById("modal").innerHTML="";}
 function uid(){return "c"+Math.random().toString(36).slice(2,8);}
+let _edit=null;   // geöffnete Karte: {id, exists, snap}
+const EDIT_FIELDS=["m_t","m_note","m_col","m_cat","m_prio","m_sub","m_owner","m_src"];
+function editVals(){return JSON.stringify(EDIT_FIELDS.map(i=>{const e=document.getElementById(i);return e?e.value:"";}));}
 function editCard(id,col){
   const c=id?state.cards.find(x=>x.id===id):{id:uid(),col:col||"eingang",cat:filterCat in CATS?filterCat:"b1",sub:filterSub!=="alle"?filterSub:"",owner:"Robert",prio:"Mittel",t:"",note:"",src:"",tools:[]};
   const subOpts=[...new Set(state.cards.filter(x=>x.sub).map(x=>x.sub))].sort().map(s=>`<option value="${esc(s)}">`).join("");
   const catOpts=Object.keys(CATS).map(k=>`<option value="${k}" ${k===c.cat?'selected':''}>${CATS[k][0]}</option>`).join("");
   const colOpts=COLS.map(([k,l])=>`<option value="${k}" ${k===c.col?'selected':''}>${l}</option>`).join("");
   const prioOpts=PRIOS.map(p=>`<option ${p===c.prio?'selected':''}>${p}</option>`).join("");
-  document.getElementById("modal").innerHTML=`<h3>${id?"Karte bearbeiten":"Neue Karte"}</h3>
+  document.getElementById("modal").innerHTML=`<div class="mhead">
+      <h3>${id?"Karte":"Neue Karte"}</h3>
+      <div class="mh-act">
+        ${id?`<button class="btn sm" style="color:var(--steuer)" onclick="delCard('${c.id}')" title="Karte löschen">🗑<span class="hl"> Löschen</span></button>`:""}
+        ${id?`<button class="btn sm" onclick="research()" title="Mit Perplexity im Web recherchieren">🔎<span class="hl"> Recherchieren</span></button>`:""}
+        <button class="btn sm primary" onclick="saveCard('${c.id}',${!!id})">Speichern</button>
+        <button class="xclose" title="Schließen (Esc)" onclick="requestClose()">✕</button>
+      </div></div>
     <label>Titel</label><input id="m_t" value="${esc(c.t)}">
-    <label>Notiz / Nächster Schritt</label><textarea id="m_note">${esc(c.note)}</textarea>
+    <label>Notiz / Nächster Schritt</label>
+    <div class="notebox" id="m_notebox" onclick="openNotePop()" title="Antippen zum Bearbeiten"></div>
+    <textarea id="m_note" hidden>${esc(c.note)}</textarea>
     <div class="frow"><div><label>Spalte</label><select id="m_col">${colOpts}</select></div>
     <div><label>Kategorie</label><select id="m_cat">${catOpts}</select></div>
     <div><label>Priorität</label><select id="m_prio">${prioOpts}</select></div></div>
@@ -624,9 +762,9 @@ function editCard(id,col){
     <div class="docs" id="docs"
       ondragover="event.preventDefault();this.classList.add('dropping')"
       ondragleave="this.classList.remove('dropping')"
-      ondrop="event.preventDefault();this.classList.remove('dropping');${id?`uploadFiles('${c.id}',event.dataTransfer.files)`:""}">
-      <h4>📎 Materialien</h4>
-      ${id?`<div id="docList"><div class="hint">lädt…</div></div><div id="upl"></div>
+      ondrop="event.preventDefault();this.classList.remove('dropping');${id?`openList('docList');uploadFiles('${c.id}',event.dataTransfer.files)`:""}">
+      ${id?`<details class="lst" id="docListBox"><summary>📎 Materialien <span class="n" id="docCnt"></span></summary>
+        <div id="docList"><div class="hint">lädt…</div></div></details><div id="upl"></div>
       <div class="doc-actions">
         <button class="btn sm" onclick="pickFiles('${c.id}',false)">📄 Datei</button>
         <button class="btn sm" onclick="pickFiles('${c.id}',true)">📷 Foto/Scan</button>
@@ -635,16 +773,51 @@ function editCard(id,col){
         <button class="btn sm" onclick="docForm('${c.id}','mail')">✉️ Mail aus Outlook</button>
       </div><div id="docForm"></div>
       <div class="hint" style="margin-top:6px">Materialien werden sofort gespeichert. Dateien und Mails (.eml/.msg) auch per Drag&Drop hierher oder direkt auf die Karte im Board ziehen.</div>`
-      :`<div class="hint">Erst <b>Speichern</b>, dann können Materialien angehängt werden.</div>`}
+      :`<h4>📎 Materialien</h4><div class="hint">Erst <b>Speichern</b>, dann können Materialien angehängt werden.</div>`}
     </div>
-    ${id?`<div class="rel" id="rel"></div>`:""}
-    <div class="modal-actions">${id?`<button class="btn" style="margin-right:auto;color:var(--steuer)" onclick="delCard('${c.id}')">Löschen</button>`:""}
-      ${id?`<button class="btn" onclick="research()" title="Mit Perplexity im Web recherchieren">🔎 Recherchieren</button>`:""}
-      <button class="btn" onclick="closeM()">Abbrechen</button>
-      <button class="btn primary" onclick="saveCard('${c.id}',${!!id})">Speichern</button></div>`;
+    ${id?`<div class="rel" id="rel"></div>`:""}`;
   M.classList.add("open");
+  setNoteBox();
+  _edit={id:c.id,exists:!!id,snap:editVals()};
   if(id){loadDocs(c.id);loadRelated(c.id);}
 }
+function openList(id){const d=document.getElementById(id);const box=d&&d.closest("details");if(box)box.open=true;}
+function setNoteBox(){
+  const v=document.getElementById("m_note").value;
+  document.getElementById("m_notebox").innerHTML=v.trim()?esc(v):`<span class="ph">Antippen, um eine Notiz zu schreiben…</span>`;
+}
+// Notiz als großes Popup: scrollbar; Doppelklick/Doppeltipp (oder „Fertig“, Esc) klappt es wieder zu
+function openNotePop(){
+  closeNotePop();
+  const p=document.createElement("div");p.id="notePopEd";p.className="notepop-ed";
+  p.innerHTML=`<div class="np-in"><div class="np-h"><b>Notiz / Nächster Schritt</b><span class="hint">Doppelklick/Doppeltipp zum Zuklappen</span>
+    <button class="btn sm primary" onclick="closeNotePop()">Fertig</button></div>
+    <textarea id="np_text"></textarea></div>`;
+  document.body.appendChild(p);
+  const t=document.getElementById("np_text");t.value=document.getElementById("m_note").value;
+  t.addEventListener("input",()=>{document.getElementById("m_note").value=t.value;});
+  t.addEventListener("dblclick",e=>{e.preventDefault();closeNotePop();});
+  let last=0;t.addEventListener("touchend",e=>{const n=Date.now();if(n-last<320){e.preventDefault();closeNotePop();}last=n;});
+  p.addEventListener("click",e=>{if(e.target===p)closeNotePop();});
+  setTimeout(()=>t.focus(),30);
+}
+function closeNotePop(){
+  const p=document.getElementById("notePopEd");if(!p)return false;
+  const t=document.getElementById("np_text"),n=document.getElementById("m_note");
+  if(t&&n){n.value=t.value;setNoteBox();}
+  p.remove();return true;
+}
+function requestClose(){
+  closeNotePop();
+  if(!_edit||editVals()===_edit.snap){closeM();return;}
+  if(confirm("Änderungen an der Karte speichern?\n\nOK = speichern · Abbrechen = verwerfen"))saveCard(_edit.id,_edit.exists);
+  else closeM();
+}
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape")return;
+  if(closeNotePop()||hideNotePeek()){e.preventDefault();return;}
+  if(M.classList.contains("open")){e.preventDefault();_edit?requestClose():closeM();}
+});
 
 // ─── Etappe 3: „Passend dazu“, Bibliothek, an Karte hängen ─────────
 function statusBadge(d){
@@ -665,12 +838,18 @@ async function loadRelated(cid){
     const docs=d.docs.filter(x=>x.score>=0.40);
     const cards=d.cards.filter(x=>x.score>=0.50).map(x=>state.cards.find(c=>c.id===x.id)).filter(Boolean);
     if(!docs.length&&!cards.length){el.innerHTML="";return;}
-    el.innerHTML=`<h4>🧠 Passend dazu</h4>
+    el.innerHTML=`${docs.length?`<details class="lst"><summary>🧠 Passende Materialien <span class="n">(${docs.length})</span></summary>
       ${docs.map(x=>`<div class="doc"><span class="ic">${x.kind==="file"?fileIcon(x.mime):DOC_IC[x.kind]}</span>
         <div class="bd">${docLink(x)}<div class="m">${esc((x.snippet||"").slice(0,160))}</div></div>
-        <button class="btn sm" title="An diese Karte hängen" onclick="attachDoc('${cid}',${x.id})">＋</button></div>`).join("")}
-      ${cards.length?`<div class="m" style="font-size:12px;margin-top:4px">Ähnliche Karten: ${cards.map(c=>`<span class="cl" style="color:var(--acc);cursor:pointer" onclick="editCard('${c.id}')">${esc(c.t)}</span>`).join(" · ")}</div>`:""}`;
+        <button class="btn sm" title="An diese Karte hängen" onclick="attachDoc('${cid}',${x.id})">＋</button></div>`).join("")}</details>`:""}
+      ${cards.length?`<details class="lst"><summary>🗂 Ähnliche Karten <span class="n">(${cards.length})</span></summary>
+        ${cards.map(c=>{const ct=CATS[c.cat]||["?","var(--line)"];return `<div class="doc simcard" style="border-left:3px solid ${ct[1]}" onclick="switchCard('${c.id}')">
+          <div class="bd"><b>${esc(c.t)}</b><div class="m">${esc(ct[0])}${c.sub?" · "+esc(c.sub):""} · ${esc((COLS.find(x=>x[0]===c.col)||["",""])[1])}</div></div></div>`;}).join("")}</details>`:""}`;
   }catch(e){}
+}
+function switchCard(id){
+  if(_edit&&editVals()!==_edit.snap&&!confirm("Ungespeicherte Änderungen verwerfen und zur anderen Karte wechseln?"))return;
+  closeM();editCard(id);
 }
 async function attachDoc(cid,docId,quiet){
   try{
@@ -683,19 +862,20 @@ async function attachDoc(cid,docId,quiet){
     return true;
   }catch(e){toast("⚠️ Keine Verbindung zum Server");return false;}
 }
-function pickCard(docId){
-  document.getElementById("modal").innerHTML=`<h3>An welche Karte hängen?</h3>
-    <input id="pk_q" placeholder="Karte suchen…" oninput="renderPick(${docId})">
-    <div class="pick" id="pk_list"></div>
-    <div class="modal-actions"><button class="btn" onclick="closeM()">Abbrechen</button></div>`;
-  M.classList.add("open");renderPick(docId);document.getElementById("pk_q").focus();
+let _pickCb=null;
+function pickCard(docId){pickTarget(async cid=>{if(await attachDoc(cid,docId,true)){closeM();loadDocCounts();render();if(activeView==="lib")loadLib();}});}
+function pickTarget(cb){
+  _edit=null;_pickCb=cb;
+  document.getElementById("modal").innerHTML=`<div class="mhead"><h3>An welche Karte hängen?</h3><button class="xclose" onclick="closeM()" title="Schließen (Esc)">✕</button></div>
+    <input id="pk_q" placeholder="Karte suchen…" oninput="renderPick()">
+    <div class="pick" id="pk_list"></div>`;
+  M.classList.add("open");renderPick();document.getElementById("pk_q").focus();
 }
-function renderPick(docId){
+function renderPick(){
   const q=(document.getElementById("pk_q").value||"").toLowerCase();
   const list=state.cards.filter(c=>!q||(c.t+" "+(c.sub||"")+" "+(c.note||"")).toLowerCase().includes(q)).slice(0,60);
-  document.getElementById("pk_list").innerHTML=list.map(c=>`<div class="pc" onclick="pickDone('${c.id}',${docId})">${esc(c.t)}<br><small>${esc((CATS[c.cat]||[""])[0])}${c.sub?" · "+esc(c.sub):""}</small></div>`).join("")||`<div class="hint">Keine Karte gefunden.</div>`;
+  document.getElementById("pk_list").innerHTML=list.map(c=>`<div class="pc" onclick="_pickCb&&_pickCb('${c.id}')">${esc(c.t)}<br><small>${esc((CATS[c.cat]||[""])[0])}${c.sub?" · "+esc(c.sub):""}</small></div>`).join("")||`<div class="hint">Keine Karte gefunden.</div>`;
 }
-async function pickDone(cid,docId){if(await attachDoc(cid,docId,true)){closeM();render();if(activeView==="lib")loadLib();}}
 
 let lib={q:"",origin:"",status:"",items:[],total:0,loaded:false,stats:null,offset:0};
 function renderLib(){
@@ -754,6 +934,7 @@ async function loadDocs(cid){
     const docs=await r.json();
     docCounts[cid]=docs.length;if(!docs.length)delete docCounts[cid];
     if(!document.getElementById("docList"))return;
+    const dc=document.getElementById("docCnt");if(dc)dc.textContent=`(${docs.length})`;
     el.innerHTML=docs.length?docs.map(d=>`<div class="doc">
       <span class="ic">${d.kind==="file"?fileIcon(d.mime):DOC_IC[d.kind]}</span>
       <div class="bd">${docLink(d)}${statusBadge(d)}
@@ -862,6 +1043,7 @@ async function outlookDialog(){
        <p class="hint">Mails an Karten hängen: Karte öffnen → „✉️ Mail aus Outlook“, oder Claude bitten („Häng die Mail von … an die Karte …“).</p>`
     :`<p>Noch nicht verbunden.${lg.state==="failed"?" <span style='color:var(--steuer)'>Letzter Versuch: "+esc(lg.error||"fehlgeschlagen")+"</span>":""}</p>
        <p class="hint">Anmeldung per Gerätecode: Du bekommst einen Code, gibst ihn bei Microsoft ein – fertig. Das Cockpit erhält nur Leserecht auf Mails.</p>`;
+  _edit=null;
   document.getElementById("modal").innerHTML=`<h3>✉️ Outlook</h3>${body}
     <div class="modal-actions">
       ${s.configured&&s.connected?`<button class="btn" style="margin-right:auto;color:var(--steuer)" onclick="outlookLogout()">Trennen</button>`:""}
