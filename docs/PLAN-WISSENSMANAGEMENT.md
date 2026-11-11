@@ -90,6 +90,17 @@ Ursprünglicher Plan:
 - Perplexity: Button „Recherchieren“ an Karten (öffnet Perplexity mit vorformulierter Frage).
 
 ### Etappe 5 – Automatisch einlesen
+Reihenfolge (festgelegt 11.11.2026):
+1. ✅ gebaut (11.11.2026) – **Outlook lesen:** eigene Microsoft-App „Roberts Cockpit“, nur
+   Mail.Read/offline_access/User.Read, Anmeldung per Gerätecode (`msgraph.py`).
+   Mail-Import mit Original, Text und Anhängen, ohne doppelten Import (Message-ID) – `mail.py`.
+   Im Cockpit: ✉️ Outlook (verbinden), Karte → „✉️ Mail aus Outlook“.
+   MCP-Werkzeug `mail_anhaengen` für die Sprachsteuerung. Einrichtung: `docs/OUTLOOK.md`.
+2. ✅ gebaut (11.11.2026) – **Drag & Drop** von Dateien, Mails (.eml/.msg) und Links direkt auf
+   Karten im Board. Mails gehen denselben Weg wie aus Outlook (Anhänge einzeln, keine Duplikate).
+3. Später: Outlook-Ordner „Cockpit“ automatisch übernehmen und Karten für neue Mails vorschlagen.
+
+Ursprüngliche Idee:
 - **OneDrive + Outlook:** über Microsoft Graph (App-Registrierung im Microsoft-365-Konto).
   Z. B. ein OneDrive-Ordner „Cockpit“ und eine Outlook-Kategorie/Ordner „Cockpit“.
 - **Mac:** Ordner, der automatisch auf den Server synchronisiert wird.

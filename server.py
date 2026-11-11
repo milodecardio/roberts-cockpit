@@ -39,7 +39,9 @@ except ImportError:
 import agent_api
 import db
 import embed
+import mail
 import mcp_server
+import msgraph
 import oauth
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -100,6 +102,7 @@ CORS = {"Access-Control-Allow-Origin": "*",
 
 class McpContext:
     path = DB_PATH
+    files_dir = FILES_DIR
 
     @property
     def vectors(self):
@@ -284,6 +287,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if method == "POST" and p == "/api/import/file":
                 self._json(200, self._receive_import())
                 return True
+            # ─── Etappe 5: Outlook (nur Lesen) ───
+            if p.startswith("/api/mail/"):
+                if method == "GET" and p == "/api/mail/status":
+                    self._json(200, msgraph.status(DB_PATH))
+                elif method == "POST" and p == "/api/mail/login":
+                    self._json(200, msgraph.start_login(DB_PATH))
+                elif method == "POST" and p == "/api/mail/logout":
+                    msgraph.logout(DB_PATH)
+                    self._json(200, {"ok": True})
+                elif method == "GET" and p == "/api/mail/search":
+                    self._json(200, mail.search(DB_PATH, qs.get("q", ""), int(qs.get("n", "15"))))
+                else:
+                    self._send(405, "text/plain", b"method not allowed")
+                return True
+            m = re.fullmatch(r"/api/cards/([^/]+)/mail", p)
+            if m and method == "POST":
+                mid = (self._read_json().get("message_id") or "").strip()
+                if not mid:
+                    raise ValueError("message_id fehlt")
+                self._json(200, mail.import_graph(DB_PATH, FILES_DIR, mid,
+                                                  urllib.parse.unquote(m.group(1)), actor="robert"))
+                return True
             m = re.fullmatch(r"/api/cards/([^/]+)/(related|attach)", p)
             if m:
                 card_id = urllib.parse.unquote(m.group(1))
@@ -330,7 +355,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return True
         except db.NotFound as e:
             self._json(404, {"error": str(e)})
-        except ValueError as e:
+        except msgraph.NotConnected as e:
+            self._json(409, {"error": str(e), "not_connected": True})
+        except msgraph.GraphError as e:
+            self._json(502, {"error": str(e)})
+        except (ValueError, mail.MailError) as e:
             self._json(400, {"error": str(e)})
         except Exception as e:
             self._json(500, {"error": str(e)})
@@ -338,6 +367,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _receive_file(self, card_id):
         sha, filename, mime, length = self._store_upload()
+        if mail.is_mail_file(filename, mime) and length <= mail.MAX_MAIL:
+            # Mail: Original + Anhänge einzeln, ohne doppelten Import (Message-ID)
+            with open(_blob_path(sha), "rb") as f:
+                raw = f.read()
+            try:
+                r = mail.import_raw(DB_PATH, FILES_DIR, raw, card_id=card_id, filename=filename,
+                                    origin_path="E-Mail (hochgeladen)", actor="robert")
+                r["id"] = r["doc_id"]
+                return r
+            except mail.MailError:
+                pass  # z. B. .msg ohne msgconvert → als normale Datei ablegen
         title = os.path.splitext(filename)[0]
         return db.add_doc(DB_PATH, card_id, "file", title=title, filename=filename,
                           mime=mime, size=length, sha256=sha)

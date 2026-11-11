@@ -16,6 +16,8 @@ import re
 import time
 
 import db
+import mail
+import msgraph
 
 SERVER_INFO = {"name": "roberts-cockpit", "title": "Roberts Cockpit", "version": "1.0"}
 PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
@@ -30,6 +32,7 @@ Kategorien: b1 Beruflich & Projekte, b2 Recht & Verwaltung, b3 Technik, b4 Mediz
 b5 Pflege Mutter, b6 Privates, b7 Sonstiges, b8 Themen ohne Aufgabe, vision.
 Hinweise: Antworte auf Deutsch. Für Fragen zuerst `suchen` benutzen, dann gezielt
 `dokument_lesen`/`karte_lesen`. Quellen immer mit Dokument- bzw. Karten-ID nennen.
+Mails aus Outlook (nur Lesen) mit `mail_anhaengen` an Karten hängen.
 Vor dem Anlegen einer Karte prüfen, ob es schon eine passende gibt. Änderungen an
 Karten nur, wenn Robert darum bittet. B4/B5 enthalten Gesundheitsdaten – sorgsam behandeln."""
 
@@ -138,6 +141,23 @@ TOOLS = [
          "titel": _s("Titel der Notiz bzw. des Links"),
          "text": _s("Inhalt der Notiz"),
          "url": _s("Statt Notiz: Link (https://…)")}}, "annotations": RW},
+    {"name": "mail_anhaengen", "title": "Mail aus Outlook an Karte hängen",
+     "description": "Sucht eine Mail in Roberts Outlook (nur Lesezugriff) und hängt sie mit Original, "
+                    "Text und allen Anhängen an eine Karte. Bereits übernommene Mails werden nicht "
+                    "doppelt gespeichert, nur verknüpft. Ablauf: mit 'suche' aufrufen (z. B. "
+                    "'from:mueller Zeugnis', 'subject:Rechnung', 'received>=2026-11-01 Stundenplan'). "
+                    "Passt genau eine Mail, wird sie sofort angehängt; bei mehreren kommt eine "
+                    "nummerierte Liste – Robert fragen, welche gemeint ist, dann erneut mit 'mail_id' "
+                    "aufrufen. Ohne karten_id landet die Mail nur in der Bibliothek.",
+     "inputSchema": {"type": "object", "properties": {
+         "karten_id": _s("ID der Karte, an die die Mail soll"),
+         "suche": _s("Suchbegriffe (Outlook-Suche, KQL möglich: from:, subject:, received>=JJJJ-MM-TT)"),
+         "mail_id": _s("Genaue Mail-ID aus einer vorherigen Trefferliste"),
+         "neueste_nehmen": {"type": "boolean", "default": False,
+                            "description": "Bei mehreren Treffern die neueste Mail nehmen, statt nachzufragen"},
+         "anzahl": _i("Höchstzahl Treffer in der Liste", 8, 1, 25)}},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
+                     "openWorldHint": True}},
 ]
 
 
@@ -397,11 +417,57 @@ def t_notiz_anhaengen(ctx, a):
     return "✅ %s an Karte %s angehängt (Dok %d)." % ("Link" if url else "Notiz", cid, d["id"])
 
 
+def _mail_line(i, m):
+    d = (m.get("date") or "")[:10]
+    d = "%s.%s.%s" % (d[8:10], d[5:7], d[0:4]) if len(d) == 10 else d
+    line = "%d. %s · %s · „%s“%s%s" % (i, d, m["from"], m["subject"],
+                                      " · 📎" if m["has_attachments"] else "",
+                                      " · (schon im Cockpit)" if m["imported"] else "")
+    if m.get("preview"):
+        line += "\n     %s" % _clean_snip(m["preview"])[:160]
+    return line + "\n     mail_id: %s" % m["id"]
+
+
+def t_mail_anhaengen(ctx, a):
+    cid = str(a.get("karten_id") or "").strip() or None
+    card = db.get_card(ctx.path, cid) if cid else None
+    mid = (a.get("mail_id") or "").strip()
+    try:
+        if not mid:
+            q = (a.get("suche") or "").strip()
+            if not q:
+                raise ToolError("Bitte 'suche' oder 'mail_id' angeben")
+            hits = mail.search(ctx.path, q, max(1, min(int(a.get("anzahl") or 8), 25)))
+            if not hits:
+                return "Keine Mail gefunden für: %s\nTipp: weniger oder andere Suchbegriffe, z. B. nur den Nachnamen." % q
+            if len(hits) > 1 and not a.get("neueste_nehmen"):
+                return "\n".join(["%d Mails gefunden für „%s“ – welche soll%s?" % (
+                    len(hits), q, " an [%s] %s" % (card["id"], card["t"]) if card else " in die Bibliothek")]
+                    + [_mail_line(i + 1, m) for i, m in enumerate(hits)]
+                    + ["", "Danach mail_anhaengen mit karten_id und der passenden mail_id aufrufen."])
+            mid = hits[0]["id"]
+        r = mail.import_graph(ctx.path, ctx.files_dir, mid, cid, actor="claude")
+    except msgraph.NotConnected as e:
+        raise ToolError(str(e))
+    except (msgraph.GraphError, mail.MailError) as e:
+        raise ToolError(str(e))
+    where = "an Karte [%s] %s" % (card["id"], card["t"]) if card else "in die Bibliothek (an keiner Karte)"
+    if r["already"]:
+        return "✅ Mail war schon im Cockpit (Dok %d: %s) – jetzt verknüpft %s, mit %d Anhängen." % (
+            r["doc_id"], r["title"], where, len(r["attachments"]))
+    att = r.get("attachment_names") or []
+    return "✅ Mail übernommen %s:\n  [Dok %d] %s%s\nText und Anhänge werden in den nächsten Minuten ausgelesen " \
+           "und sind dann durchsuchbar." % (
+               where, r["doc_id"], r["title"],
+               "".join("\n  📎 [Dok %d] %s" % (i, n) for i, n in zip(r["attachments"], att)))
+
+
 HANDLERS = {
     "cockpit_uebersicht": t_uebersicht, "suchen": t_suchen, "karten_auflisten": t_karten_auflisten,
     "karte_lesen": t_karte_lesen, "dokument_lesen": t_dokument_lesen, "bibliothek": t_bibliothek,
     "karte_anlegen": t_karte_anlegen, "karte_aendern": t_karte_aendern,
     "material_verknuepfen": t_material_verknuepfen, "notiz_anhaengen": t_notiz_anhaengen,
+    "mail_anhaengen": t_mail_anhaengen,
 }
 
 

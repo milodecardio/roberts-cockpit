@@ -655,7 +655,7 @@ def import_known(path, source):
         conn.close()
 
 
-def add_import_doc(path, source, ref, mtime, size, filename, mime, sha256, origin_path):
+def add_import_doc(path, source, ref, mtime, size, filename, mime, sha256, origin_path, title=None):
     """Datei aus einer Quelle (Mac, OneDrive, …) in die Bibliothek aufnehmen.
     Gleicher Inhalt → vorhandenes Material wird wiederverwendet."""
     now = time.time()
@@ -678,7 +678,7 @@ def add_import_doc(path, source, ref, mtime, size, filename, mime, sha256, origi
                 cur = conn.execute(
                     "INSERT INTO documents (kind, title, filename, mime, size, sha256, created_at, "
                     "updated_at, origin, origin_path) VALUES ('file', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (os.path.splitext(filename)[0], filename, mime, size, sha256, now, now,
+                    (title or os.path.splitext(filename)[0], filename, mime, size, sha256, now, now,
                      source, origin_path))
                 doc_id = cur.lastrowid
                 created = True
@@ -693,6 +693,55 @@ def add_import_doc(path, source, ref, mtime, size, filename, mime, sha256, origi
         except Exception:
             conn.rollback()
             raise
+        finally:
+            conn.close()
+
+
+def source_docs(path, source, ref):
+    """doc_id zu (source, ref) oder None."""
+    conn = _connect(path)
+    try:
+        r = conn.execute("SELECT doc_id FROM sources WHERE source = ? AND ref = ?", (source, ref)).fetchone()
+        return r["doc_id"] if r else None
+    finally:
+        conn.close()
+
+
+def source_docs_prefix(path, source, prefix):
+    """Alle doc_ids einer Quelle, deren ref mit prefix beginnt (z. B. Anhänge einer Mail)."""
+    conn = _connect(path)
+    try:
+        return [r["doc_id"] for r in conn.execute(
+            "SELECT doc_id FROM sources WHERE source = ? AND substr(ref, 1, ?) = ? ORDER BY ref",
+            (source, len(prefix), prefix))]
+    finally:
+        conn.close()
+
+
+# ─── Einstellungen (Etappe 5: Microsoft-Anmeldung) ────────────────────
+
+def meta_get(path, key):
+    conn = _connect(path)
+    try:
+        r = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return r["value"] if r else None
+    finally:
+        conn.close()
+
+
+def meta_set(path, key, value):
+    """value=None löscht den Eintrag."""
+    if key == "_ts":
+        raise ValueError("_ts ist reserviert")
+    with _write_lock:
+        conn = _connect(path)
+        try:
+            if value is None:
+                conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+            else:
+                conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                             "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+            conn.commit()
         finally:
             conn.close()
 

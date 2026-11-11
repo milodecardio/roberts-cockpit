@@ -139,6 +139,14 @@
   .pick .pc{padding:7px 9px;border:1px solid var(--line);border-radius:8px;margin-bottom:5px;cursor:pointer;font-size:13px;background:var(--panel2)}
   .pick .pc:hover{border-color:var(--acc)}
   .pick .pc small{color:var(--mut)}
+  /* Etappe 5: Mails, Dateien auf Karten ziehen */
+  .card.file-over{outline:2px dashed var(--acc);outline-offset:2px;background:var(--panel2)}
+  .mailres{max-height:46vh;overflow:auto;margin-top:8px}
+  .mailres .mr{padding:7px 9px;border:1px solid var(--line);border-radius:8px;margin-bottom:5px;background:var(--panel2);font-size:13px;display:flex;gap:8px;align-items:flex-start}
+  .mailres .mr .bd{flex:1;min-width:0}
+  .mailres .mr small{color:var(--mut);display:block;overflow-wrap:anywhere}
+  #uplFloat{position:fixed;right:16px;bottom:16px;z-index:60;max-width:min(360px,calc(100vw - 32px))}
+  #uplFloat .up{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:7px 10px;margin-top:6px;color:var(--txt)}
   @media(max-width:760px){.grid2,.frow{grid-template-columns:1fr}}
 </style>
 </head>
@@ -149,6 +157,7 @@
     <div class="sub">Steuerungs- & Priorisierungs-Cockpit · v2.0</div>
   </div>
   <div class="spacer"></div>
+  <button class="btn sm" onclick="outlookDialog()" title="Outlook-Verbindung (nur Lesen)">✉️ Outlook</button>
   <button class="btn sm" onclick="exportData()">⬇︎ Backup</button>
   <button class="btn sm" onclick="importData()">⬆︎ Import</button>
   <button class="btn sm" onclick="resetData()">↺ Standard</button>
@@ -157,6 +166,7 @@
 <div class="filters" id="filters"></div>
 <main id="view"></main>
 <div id="toast"></div>
+<div id="uplFloat"></div>
 <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
 <input type="file" id="fileIn" accept="application/json" style="display:none">
 
@@ -451,18 +461,26 @@ function onDragEnd(e){
   document.querySelectorAll('.drag-over').forEach(el=>el.classList.remove('drag-over'));
   document.querySelectorAll('.col').forEach(c=>c.classList.remove('over'));
 }
+// Etappe 5: Von außen gezogen (Datei, Mail, Link) – nicht eine Karte aus dem Board
+function isExternalDrag(e){
+  if(dragId)return false;
+  const t=Array.from((e.dataTransfer&&e.dataTransfer.types)||[]);
+  return t.includes("Files")||t.includes("text/uri-list")||t.includes("text/plain");
+}
 function onDragOver(e,targetId){
   e.preventDefault();
   e.stopPropagation();
-  document.querySelectorAll('.drag-over').forEach(el=>el.classList.remove('drag-over'));
+  document.querySelectorAll('.drag-over,.file-over').forEach(el=>el.classList.remove('drag-over','file-over'));
+  if(isExternalDrag(e)){e.dataTransfer.dropEffect="copy";e.currentTarget.classList.add('file-over');return;}
   if(dragId!==targetId)e.currentTarget.classList.add('drag-over');
 }
 function onDropCard(e,targetId){
   e.preventDefault();
   e.stopPropagation();
   document.querySelectorAll('.col').forEach(c=>c.classList.remove('over'));
-  document.querySelectorAll('.drag-over').forEach(el=>el.classList.remove('drag-over'));
-  if(!dragId||dragId===targetId){dragId=null;return;}
+  document.querySelectorAll('.drag-over,.file-over').forEach(el=>el.classList.remove('drag-over','file-over'));
+  if(!dragId){dropOnCard(targetId,e.dataTransfer);return;}
+  if(dragId===targetId){dragId=null;return;}
   const fromIdx=state.cards.findIndex(x=>x.id===dragId);
   const targetCard=state.cards.find(x=>x.id===targetId);
   if(fromIdx<0||!targetCard){dragId=null;return;}
@@ -476,11 +494,33 @@ function onDropCard(e,targetId){
 function onDropCol(e,col){
   e.preventDefault();
   document.querySelectorAll('.col').forEach(c=>c.classList.remove('over'));
-  if(!dragId)return;
+  if(!dragId){if(e.dataTransfer&&e.dataTransfer.types.length)toast("Dateien und Mails bitte direkt auf eine Karte ziehen");return;}
   const c=state.cards.find(x=>x.id===dragId);
   if(c){c.col=col;save();render();}
   dragId=null;
 }
+
+async function dropOnCard(cid,dt){
+  const c=state.cards.find(x=>x.id===cid);if(!c||!dt)return;
+  if(_dirty||!_base[cid]){await flush();}
+  if(dt.files&&dt.files.length){uploadFiles(cid,dt.files);return;}
+  const uri=(dt.getData("text/uri-list")||"").split(/\r?\n/).find(l=>l&&!l.startsWith("#"))||"";
+  const txt=(dt.getData("text/plain")||"").trim();
+  const url=/^https?:\/\//i.test(uri)?uri:/^https?:\/\/\S+$/i.test(txt)?txt:"";
+  if(url){
+    try{
+      const r=await fetch(`/api/cards/${encodeURIComponent(cid)}/links`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,title:""})});
+      const d=await r.json();
+      if(!r.ok){toast("⚠️ "+(d.error||"Fehler"));return;}
+      docCounts[cid]=(docCounts[cid]||0)+1;render();toast("🔗 Link an „"+c.t.slice(0,40)+"“ gehängt");
+    }catch(e){toast("⚠️ Keine Verbindung zum Server");}
+    return;
+  }
+  toast("Das lässt sich nicht direkt übernehmen – Mail in Outlook als Datei sichern oder in der Karte „✉️ Mail aus Outlook“ nutzen");
+}
+// Dateien, die neben eine Karte fallen, nicht im Browser öffnen (würde das Cockpit verlassen)
+window.addEventListener("dragover",e=>{if(isExternalDrag(e))e.preventDefault();});
+window.addEventListener("drop",e=>{if(isExternalDrag(e))e.preventDefault();});
 
 // ─── Sort ─────────────────────────────────────────────────
 function sortColByPrio(col){
@@ -530,8 +570,9 @@ function editCard(id,col){
         <button class="btn sm" onclick="pickFiles('${c.id}',true)">📷 Foto/Scan</button>
         <button class="btn sm" onclick="docForm('${c.id}','link')">🔗 Link</button>
         <button class="btn sm" onclick="docForm('${c.id}','note')">📝 Notiz</button>
+        <button class="btn sm" onclick="docForm('${c.id}','mail')">✉️ Mail aus Outlook</button>
       </div><div id="docForm"></div>
-      <div class="hint" style="margin-top:6px">Materialien werden sofort gespeichert. Dateien auch per Drag&Drop hierher ziehen.</div>`
+      <div class="hint" style="margin-top:6px">Materialien werden sofort gespeichert. Dateien und Mails (.eml/.msg) auch per Drag&Drop hierher oder direkt auf die Karte im Board ziehen.</div>`
       :`<div class="hint">Erst <b>Speichern</b>, dann können Materialien angehängt werden.</div>`}
     </div>
     ${id?`<div class="rel" id="rel"></div>`:""}
@@ -681,7 +722,8 @@ function uploadOne(cid,f,row){
   });
 }
 async function uploadFiles(cid,files){
-  const box=document.getElementById("upl");if(!box||!files||!files.length)return;
+  if(!files||!files.length)return;
+  const box=document.getElementById("upl")||document.getElementById("uplFloat");
   let ok=0;
   for(const f of Array.from(files)){
     const row=document.createElement("div");row.className="up";
@@ -689,8 +731,9 @@ async function uploadFiles(cid,files){
     box.appendChild(row);
     if(await uploadOne(cid,f,row))ok++;
   }
-  if(ok)toast(`📎 ${ok} Datei${ok>1?"en":""} angehängt`);
-  loadDocs(cid).then(()=>{if(activeView==="board")render();});
+  if(ok){const c=state.cards.find(x=>x.id===cid);toast(`📎 ${ok} Datei${ok>1?"en":""} angehängt${c&&!document.getElementById("upl")?" an „"+c.t.slice(0,40)+"“":""}`);}
+  if(document.getElementById("docList"))loadDocs(cid).then(()=>{if(activeView==="board")render();});
+  else loadDocCounts().then(()=>{if(activeView==="board")render();});
 }
 function docForm(cid,kind){
   const el=document.getElementById("docForm");
@@ -702,8 +745,78 @@ function docForm(cid,kind){
     ?`<div class="doc-form"><label>Titel (optional)</label><input id="df_title">
        <label>Notiz</label><textarea id="df_body" style="min-height:90px"></textarea>
        <div class="modal-actions" style="margin-top:8px"><button class="btn sm" onclick="docForm()">Abbrechen</button><button class="btn sm primary" onclick="addDoc('${cid}','note')">Notiz anhängen</button></div></div>`
+    :kind==="mail"
+    ?`<div class="doc-form"><label>Mail in Outlook suchen (Absender, Betreff, Stichwort – leer = neueste)</label>
+       <div style="display:flex;gap:6px"><input id="df_mq" placeholder="z. B. Müller Zeugnis" onkeydown="if(event.key==='Enter')mailSearch('${cid}')">
+       <button class="btn sm primary" onclick="mailSearch('${cid}')">Suchen</button></div>
+       <div class="mailres" id="df_mres"></div>
+       <div class="modal-actions" style="margin-top:8px"><button class="btn sm" onclick="docForm()">Schließen</button></div></div>`
     :"";
   const f=el.querySelector("input,textarea");if(f)f.focus();
+}
+// ─── Etappe 5: Mails aus Outlook (nur Lesen) ───────────────
+async function mailSearch(cid){
+  const el=document.getElementById("df_mres");if(!el)return;
+  el.innerHTML=`<div class="hint">sucht in Outlook…</div>`;
+  try{
+    const r=await fetch("/api/mail/search?"+new URLSearchParams({q:document.getElementById("df_mq").value.trim(),n:15}));
+    const d=await r.json();
+    if(!r.ok){el.innerHTML=`<div class="hint">⚠️ ${esc(d.error||"Fehler")}${d.not_connected?` <a href="#" onclick="outlookDialog();return false" style="color:var(--acc)">Outlook verbinden</a>`:""}</div>`;return;}
+    if(!d.length){el.innerHTML=`<div class="hint">Keine Mail gefunden.</div>`;return;}
+    window._mails=d;
+    el.innerHTML=d.map((m,i)=>`<div class="mr"><div class="bd"><b>${esc(m.subject)}</b>${m.has_attachments?" 📎":""}
+      <small>${esc(m.from)} · ${m.date?new Date(m.date).toLocaleString("de-DE",{dateStyle:"short",timeStyle:"short"}):""}${m.imported?" · schon im Cockpit":""}</small>
+      <small>${esc(m.preview)}</small></div>
+      <button class="btn sm" onclick="mailImport('${cid}',${i},this)">${m.imported?"Verknüpfen":"Anhängen"}</button></div>`).join("");
+  }catch(e){el.innerHTML=`<div class="hint">⚠️ Keine Verbindung zum Server</div>`;}
+}
+async function mailImport(cid,i,btn){
+  const m=(window._mails||[])[i];if(!m)return;
+  btn.disabled=true;btn.textContent="…";
+  try{
+    const r=await fetch(`/api/cards/${encodeURIComponent(cid)}/mail`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message_id:m.id})});
+    const d=await r.json();
+    if(!r.ok){btn.disabled=false;btn.textContent="Anhängen";toast("⚠️ "+(d.error||"Fehler"));return;}
+    btn.textContent="✓";m.imported=true;
+    toast(d.already?"✉️ Mail war schon da – verknüpft":`✉️ Mail übernommen${d.attachments.length?" + "+d.attachments.length+" Anhang/Anhänge":""}`);
+    await loadDocs(cid);if(activeView==="board")render();
+  }catch(e){btn.disabled=false;btn.textContent="Anhängen";toast("⚠️ Keine Verbindung zum Server");}
+}
+let _olTimer=null;
+async function outlookDialog(){
+  clearTimeout(_olTimer);
+  let s={};
+  try{const r=await fetch("/api/mail/status");s=await r.json();}catch(e){toast("⚠️ Keine Verbindung zum Server");return;}
+  const lg=s.login||{};
+  const body=!s.configured
+    ?`<p class="hint">Die Microsoft-App ist auf dem Server noch nicht eingetragen (<code>MS_CLIENT_ID</code> in der .env). Anleitung: docs/OUTLOOK.md</p>`
+    :lg.state==="pending"
+    ?`<p>1. <a href="${esc(lg.verification_uri)}" target="_blank" rel="noopener" style="color:var(--acc)">${esc(lg.verification_uri)}</a> öffnen<br>
+       2. Diesen Code eingeben: <b style="font-size:20px;letter-spacing:2px;user-select:all">${esc(lg.user_code)}</b><br>
+       3. Mit dem Microsoft-Konto anmelden, dessen Mails ins Cockpit sollen, und zustimmen.</p>
+       <p class="hint">Das Cockpit bekommt nur <b>Leserecht</b> auf Mails (kein Senden, Löschen oder Verschieben). Wartet auf die Anmeldung…</p>`
+    :s.connected
+    ?`<p>✅ Verbunden${s.account?" mit <b>"+esc(s.account)+"</b>":""} – nur Leserecht.</p>
+       <p class="hint">Mails an Karten hängen: Karte öffnen → „✉️ Mail aus Outlook“, oder Claude bitten („Häng die Mail von … an die Karte …“).</p>`
+    :`<p>Noch nicht verbunden.${lg.state==="failed"?" <span style='color:var(--steuer)'>Letzter Versuch: "+esc(lg.error||"fehlgeschlagen")+"</span>":""}</p>
+       <p class="hint">Anmeldung per Gerätecode: Du bekommst einen Code, gibst ihn bei Microsoft ein – fertig. Das Cockpit erhält nur Leserecht auf Mails.</p>`;
+  document.getElementById("modal").innerHTML=`<h3>✉️ Outlook</h3>${body}
+    <div class="modal-actions">
+      ${s.configured&&s.connected?`<button class="btn" style="margin-right:auto;color:var(--steuer)" onclick="outlookLogout()">Trennen</button>`:""}
+      ${s.configured&&!s.connected&&lg.state!=="pending"?`<button class="btn primary" onclick="outlookLogin()">Verbinden</button>`:""}
+      <button class="btn" onclick="clearTimeout(_olTimer);closeM()">Schließen</button></div>`;
+  M.classList.add("open");
+  if(lg.state==="pending")_olTimer=setTimeout(()=>{if(M.classList.contains("open")&&document.querySelector("#modal h3")?.textContent.includes("Outlook"))outlookDialog();},3000);
+}
+async function outlookLogin(){
+  try{const r=await fetch("/api/mail/login",{method:"POST"});const d=await r.json();if(!r.ok){toast("⚠️ "+(d.error||"Fehler"));return;}}
+  catch(e){toast("⚠️ Keine Verbindung zum Server");return;}
+  outlookDialog();
+}
+async function outlookLogout(){
+  if(!confirm("Outlook-Verbindung trennen? Bereits übernommene Mails bleiben im Cockpit."))return;
+  await fetch("/api/mail/logout",{method:"POST"}).catch(()=>{});
+  outlookDialog();
 }
 async function addDoc(cid,kind){
   const v=i=>{const e=document.getElementById(i);return e?e.value.trim():"";};

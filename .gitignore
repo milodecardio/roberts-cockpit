@@ -8,3 +8,4 @@ cockpit.db
 cockpit.db-*
 *.tmp
 files/
+backups/

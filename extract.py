@@ -12,6 +12,7 @@ Word/Excel/PowerPoint (docx/xlsx/pptx/odt) werden mit Python-Bordmitteln gelesen
 import csv
 import email
 import email.policy
+import html
 import io
 import os
 import re
@@ -199,15 +200,42 @@ def _csv(path):
         return raw
 
 
+def _html_to_text(text):
+    text = re.sub(r"(?is)<(script|style|head)\b.*?</\1>", " ", text)
+    text = re.sub(r"(?i)<br\s*/?>|</(p|div|tr|li|h\d)>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return html.unescape(text)
+
+
+def _eml_bytes(raw):
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    head = "\n".join("%s: %s" % (h, msg.get(h, "")) for h in ("From", "To", "Cc", "Date", "Subject")
+                     if msg.get(h))
+    body = msg.get_body(preferencelist=("plain", "html"))
+    try:
+        text = body.get_content() if body else ""
+    except (LookupError, ValueError):
+        text = (body.get_payload(decode=True) or b"").decode("utf-8", "replace") if body else ""
+    if body and body.get_content_type() == "text/html":
+        text = _html_to_text(text)
+    names = [p.get_filename() for p in msg.iter_attachments() if p.get_filename()]
+    if names:
+        head += "\nAnhänge: " + ", ".join(names)
+    return head + "\n\n" + text
+
+
 def _eml(path):
     with open(path, "rb") as f:
-        msg = email.message_from_binary_file(f, policy=email.policy.default)
-    head = "\n".join("%s: %s" % (h, msg.get(h, "")) for h in ("From", "To", "Date", "Subject"))
-    body = msg.get_body(preferencelist=("plain", "html"))
-    text = body.get_content() if body else ""
-    if body and body.get_content_type() == "text/html":
-        text = re.sub(r"<[^>]+>", " ", text)
-    return head + "\n\n" + text
+        return _eml_bytes(f.read())
+
+
+def _msg(path):
+    if not _have("msgconvert"):
+        raise Skip("Outlook-.msg: msgconvert nicht installiert")
+    with tempfile.TemporaryDirectory() as tmp:
+        _run(["msgconvert", "--outfile", os.path.join(tmp, "mail.eml"), path], timeout=120)
+        with open(os.path.join(tmp, "mail.eml"), "rb") as f:
+            return _eml_bytes(f.read())
 
 
 def _rtf(path):
@@ -258,14 +286,15 @@ def extract(path, mime, filename):
             text = _csv(path)
         elif ext == ".eml" or mime == "message/rfc822":
             text = _eml(path)
+        elif ext == ".msg" or mime == "application/vnd.ms-outlook":
+            text = _msg(path)
         elif ext == ".rtf":
             text = _rtf(path)
         elif mime.startswith("text/") or ext in (".txt", ".md", ".json", ".xml", ".html", ".htm"):
             with open(path, "rb") as f:
                 text = _decode(f.read(MAX_CHARS * 2))
             if ext in (".html", ".htm") or mime == "text/html":
-                text = re.sub(r"(?is)<(script|style).*?</\1>", " ", text)
-                text = re.sub(r"<[^>]+>", " ", text)
+                text = _html_to_text(text)
         else:
             raise Skip("Dateityp wird nicht ausgelesen")
     except Skip as e:
