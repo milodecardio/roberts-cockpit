@@ -36,6 +36,7 @@ try:
 except ImportError:
     np = None
 
+import agent_api
 import db
 import embed
 import mcp_server
@@ -448,6 +449,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return  # Browser hat abgebrochen (z. B. beim Vorspulen)
                 left -= len(chunk)
 
+    # ─── Bewerbungs-Agent (eingeschränkte Schnittstelle, eigenes Token) ──
+
+    def _agent(self, method):
+        if not urllib.parse.urlsplit(self.path).path.startswith("/agent-api/"):
+            return False
+        if not agent_api.authorized(self.headers):
+            self._json(401, {"error": "nicht berechtigt"})
+            return True
+        return agent_api.handle(DB_PATH, method, self.path, self._read_json, self._store_upload,
+                                self._json, self._send_file)
+
+    def do_PATCH(self):
+        if not self._agent("PATCH"):
+            self._send(405, "text/plain", b"method not allowed")
+
     def do_DELETE(self):
         if self._oauth_mcp("DELETE"):
             return
@@ -459,6 +475,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self._oauth_mcp("POST"):
+            return
+        if self._agent("POST"):
             return
         if not self._authorized():
             self._require_auth()
@@ -496,6 +514,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self._oauth_mcp("GET"):
+            return
+        if self._agent("GET"):
             return
         if self.path not in PUBLIC_PATHS and not self._authorized():
             self._require_auth()
