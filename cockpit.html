@@ -134,6 +134,16 @@
   .lib .stats{font-size:12.5px;color:var(--mut);margin-bottom:12px}
   .lib .doc .bd .s{font-size:12px;color:var(--mut);margin-top:3px}
   .lib .more{margin:10px 0}
+  .lib .dz{border:2px dashed var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:var(--panel)}
+  .lib .dz .t{color:var(--mut);font-size:13px;flex:1;min-width:200px}
+  .lib.dropping .dz{border-color:var(--acc);background:rgba(110,168,254,.08)}
+  .lib .dz .up{flex-basis:100%;margin:2px 0}
+  .lib .dz .up .r{display:flex;justify-content:space-between;gap:8px}
+  .lib .scan{font-size:12.5px;color:var(--mut);margin:-4px 0 12px}
+  .lib .scan.err{color:var(--steuer)}
+  .lib .scan a{color:var(--acc);cursor:pointer}
+  .lib .dz .ios-hint{display:none}
+  @media (hover:none){.lib .dz .dragonly{display:none}.lib .dz .ios-hint{display:inline}}
   .rel{margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
   .rel h4{margin:0 0 8px;font-size:13px;color:var(--mut);font-weight:600}
   .pick{max-height:50vh;overflow:auto;margin-top:8px}
@@ -1058,7 +1068,15 @@ function renderLib(){
   const n=k=>(s&&s.docs[k])||0;
   const origins=s?Object.keys(s.origins):[];
   const ON={upload:"Hochgeladen",mac:"Mac",onedrive:"OneDrive",outlook:"Outlook"};
-  return `<div class="lib">
+  const sc=s&&s.onedrive_scan;
+  return `<div class="lib" ondragover="libDragOver(event)" ondragleave="libDragLeave(event)" ondrop="libDrop(event)">
+    <div class="dz">
+      <button class="btn sm primary" onclick="libPickFiles()">＋ Datei hinzufügen</button>
+      <button class="btn sm" onclick="libPickFiles(true)" title="Foto mit der Kamera aufnehmen">📷 Foto</button>
+      <span class="t"><span class="dragonly">Oder Dateien hierher ziehen. </span>Sie landen ohne Karte in der Bibliothek und werden durchsuchbar gemacht. Gleiche Dateien werden nicht doppelt gespeichert.
+        <span class="ios-hint">Am iPhone/iPad: „Datei auswählen“ → ⋯ → „Dokumente scannen“.</span></span>
+    </div>
+    ${sc?scanLine(sc):""}
     <div class="bar">
       <input id="lib_q" placeholder="🔍 in der Bibliothek suchen…" value="${esc(lib.q)}" onkeydown="if(event.key==='Enter'){lib.q=this.value;lib.offset=0;loadLib()}">
       <select onchange="lib.origin=this.value;lib.offset=0;loadLib()"><option value="">Alle Quellen</option>${origins.map(o=>`<option value="${esc(o)}" ${lib.origin===o?"selected":""}>${esc(ON[o]||o)} (${s.origins[o]})</option>`).join("")}</select>
@@ -1079,6 +1097,81 @@ function renderLib(){
       </div></div>`;}).join("")||(lib.loaded?`<div class="hint">Keine Materialien gefunden.</div>`:"")}
     ${lib.items.length<lib.total?`<button class="btn more" onclick="lib.offset+=100;loadLib(true)">Weitere laden (${lib.total-lib.items.length})</button>`:""}
   </div>`;
+}
+// ─── Upload ohne Karte (Bibliothek) ───────────────────────
+function libPickFiles(camera){
+  const i=document.createElement("input");i.type="file";i.multiple=!camera;
+  if(camera){i.accept="image/*";i.capture="environment";}
+  i.style.display="none";document.body.appendChild(i);   // iOS braucht das Feld im Dokument
+  i.onchange=()=>{const f=Array.from(i.files||[]);i.remove();libUpload(f);};
+  i.click();
+}
+function isFileDrag(e){return !dragId&&Array.from((e.dataTransfer&&e.dataTransfer.types)||[]).includes("Files");}
+function libDragOver(e){if(!isFileDrag(e))return;e.preventDefault();e.dataTransfer.dropEffect="copy";e.currentTarget.classList.add("dropping");}
+function libDragLeave(e){if(!e.currentTarget.contains(e.relatedTarget))e.currentTarget.classList.remove("dropping");}
+function libDrop(e){
+  if(!isFileDrag(e))return;
+  e.preventDefault();e.currentTarget.classList.remove("dropping");
+  const f=Array.from(e.dataTransfer.files||[]).filter(x=>x.size>0||x.type);  // Ordner haben weder Größe noch Typ
+  if(!f.length){toast("⚠️ Ordner lassen sich nicht hochladen – bitte die Dateien selbst auswählen");return;}
+  libUpload(f);
+}
+let _libBusy=false,_libQueue=[];
+async function libUpload(files){
+  if(!files||!files.length)return;
+  _libQueue.push(...files);
+  if(_libBusy)return;   // läuft schon – neue Dateien hinten anstellen
+  _libBusy=true;
+  let neu=0,dup=0,fail=0,done=0;
+  const box=()=>document.getElementById("uplFloat");   // feste Box: übersteht Neuzeichnen der Ansicht
+  const head=document.createElement("div");head.className="up";
+  const upd=()=>{head.textContent=`⬆︎ ${done} von ${done+_libQueue.length+1} Dateien …`;};
+  box().appendChild(head);
+  while(_libQueue.length){
+    const f=_libQueue.shift();upd();
+    const row=document.createElement("div");row.className="up";
+    row.innerHTML=`<div class="r"><span>${esc(f.name||"datei")}</span><span>${fmtSize(f.size)}</span></div><progress max="1" value="0"></progress>`;
+    box().appendChild(row);
+    const r=await libUploadOne(f,row);
+    if(!r){fail++;}
+    else{
+      if(r.created)neu++;else dup++;
+      row.innerHTML=`✓ ${esc(f.name||"datei")}${r.created?"":" <span style='color:var(--mut)'>– war schon da, verknüpft</span>"}`;
+      setTimeout(()=>row.remove(),r.created?2500:6000);
+    }
+    done++;
+  }
+  head.remove();_libBusy=false;
+  const parts=[];if(neu)parts.push(`${neu} neu`);if(dup)parts.push(`${dup} schon vorhanden`);if(fail)parts.push(`${fail} fehlgeschlagen`);
+  toast(`📚 Bibliothek: ${parts.join(", ")}`);
+  lib.offset=0;if(activeView==="lib")loadLib();
+}
+function libUploadOne(f,row){
+  return new Promise(res=>{
+    const x=new XMLHttpRequest();
+    x.open("POST","/api/import/file");
+    x.setRequestHeader("X-Source","upload");
+    x.setRequestHeader("X-Filename",encodeURIComponent(f.name||"datei"));
+    if(f.lastModified)x.setRequestHeader("X-Source-Mtime",String(f.lastModified/1000));
+    x.setRequestHeader("Content-Type",f.type||"application/octet-stream");
+    x.upload.onprogress=e=>{const p=row.querySelector("progress");if(p&&e.lengthComputable)p.value=e.loaded/e.total;};
+    x.onload=()=>{let d={};try{d=JSON.parse(x.responseText);}catch(e){}
+      if(x.status===200){res(d);return;}
+      row.innerHTML=`⚠️ ${esc(f.name)}: ${esc(d.error||"Fehler "+x.status)}`;res(null);};
+    x.onerror=()=>{row.innerHTML=`⚠️ ${esc(f.name)}: Verbindung unterbrochen`;res(null);};
+    x.send(f);
+  });
+}
+function scanLine(sc){
+  const t=v=>v?new Date(v).toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"–";
+  if(sc.needs_relogin)return `<div class="scan err">📥 OneDrive-Scan-Eingang: <b>Bitte neu anmelden</b> – die Berechtigung für OneDrive fehlt noch. <a onclick="outlookDialog()">✉️ Outlook öffnen</a> → Trennen → Verbinden.</div>`;
+  const ls=sc.last_summary||{};
+  const info=sc.last_run?`zuletzt ${t(sc.last_run)}${ls.imported?` · ${ls.imported} neu übernommen`:""}${ls.skipped_young?` · ${ls.skipped_young} wartet (wird gerade hochgeladen)`:""}`:"noch nicht gelaufen";
+  return `<div class="scan${sc.error?" err":""}">📥 OneDrive-Scan-Eingang „${esc(sc.folder||"")}“: ${sc.running?"läuft gerade …":info}${sc.error?` · ⚠️ ${esc(sc.error)}`:""} · <a onclick="scanNow()">jetzt prüfen</a></div>`;
+}
+async function scanNow(){
+  try{await fetch("/api/onedrive-scan/run",{method:"POST"});toast("📥 OneDrive-Eingang wird geprüft …");setTimeout(loadLib,8000);}
+  catch(e){toast("⚠️ Keine Verbindung zum Server");}
 }
 async function loadLib(append){
   try{
@@ -1211,12 +1304,13 @@ async function outlookDialog(){
     ?`<p>1. <a href="${esc(lg.verification_uri)}" target="_blank" rel="noopener" style="color:var(--acc)">${esc(lg.verification_uri)}</a> öffnen<br>
        2. Diesen Code eingeben: <b style="font-size:20px;letter-spacing:2px;user-select:all">${esc(lg.user_code)}</b><br>
        3. Mit dem Microsoft-Konto anmelden, dessen Mails ins Cockpit sollen, und zustimmen.</p>
-       <p class="hint">Das Cockpit bekommt nur <b>Leserecht</b> auf Mails (kein Senden, Löschen oder Verschieben). Wartet auf die Anmeldung…</p>`
+       <p class="hint">Das Cockpit bekommt auf Mails nur <b>Leserecht</b> (kein Senden, Löschen oder Verschieben). Im OneDrive darf es Dateien aus „AAA Cockpit-Eingang“ lesen und nach „übernommen“ verschieben – gelöscht wird nichts. Wartet auf die Anmeldung…</p>`
     :s.connected
-    ?`<p>✅ Verbunden${s.account?" mit <b>"+esc(s.account)+"</b>":""} – nur Leserecht.</p>
+    ?`<p>✅ Verbunden${s.account?" mit <b>"+esc(s.account)+"</b>":""} – Mails nur lesen${s.files_access?", OneDrive-Scan-Eingang aktiv":""}.</p>
+       ${s.relogin_hint?`<p style="color:var(--steuer)"><b>Bitte neu anmelden:</b> Für den OneDrive-Scan-Eingang fehlt noch die Berechtigung „Dateien“. Unten „Trennen“, dann „Verbinden“ – deine übernommenen Mails bleiben erhalten.</p>`:""}
        <p class="hint">Mails an Karten hängen: Karte öffnen → „✉️ Mail aus Outlook“, oder Claude bitten („Häng die Mail von … an die Karte …“).</p>`
     :`<p>Noch nicht verbunden.${lg.state==="failed"?" <span style='color:var(--steuer)'>Letzter Versuch: "+esc(lg.error||"fehlgeschlagen")+"</span>":""}</p>
-       <p class="hint">Anmeldung per Gerätecode: Du bekommst einen Code, gibst ihn bei Microsoft ein – fertig. Das Cockpit erhält nur Leserecht auf Mails.</p>`;
+       <p class="hint">Anmeldung per Gerätecode: Du bekommst einen Code, gibst ihn bei Microsoft ein – fertig. Das Cockpit erhält nur Leserecht auf Mails und holt Scans aus dem OneDrive-Ordner „AAA Cockpit-Eingang“.</p>`;
   _edit=null;
   document.getElementById("modal").innerHTML=`<h3>✉️ Outlook</h3>${body}
     <div class="modal-actions">

@@ -1,8 +1,9 @@
 # Outlook-Anbindung (Etappe 5, Schritt 1)
 
 Das Cockpit liest Mails über eine **eigene Microsoft-App „Roberts Cockpit“** – nur mit
-Leserecht. Senden, Löschen, Verschieben oder Markieren ist mit diesen Berechtigungen
-technisch nicht möglich.
+Leserecht. Mails senden, löschen, verschieben oder markieren ist mit diesen Berechtigungen
+technisch nicht möglich. Zusätzlich (seit 11.11.2026) `Files.ReadWrite` für den
+**OneDrive-Scan-Eingang** (siehe unten): Dateien im OneDrive lesen und verschieben.
 
 ## 1. App registrieren (einmalig, ca. 5 Minuten)
 
@@ -19,7 +20,7 @@ technisch nicht möglich.
 4. **Authentifizierung** → ganz unten *Öffentliche Clientflows zulassen* → **Ja** → Speichern.
    (Nötig für die Anmeldung per Gerätecode; die App hat dadurch kein Geheimnis/Passwort.)
 5. **API-Berechtigungen** → *Berechtigung hinzufügen* → Microsoft Graph →
-   **Delegierte Berechtigungen**: `Mail.Read`, `offline_access`, `User.Read`
+   **Delegierte Berechtigungen**: `Mail.Read`, `Files.ReadWrite`, `offline_access`, `User.Read`
    (`User.Read` ist meist schon da). Keine weiteren Berechtigungen hinzufügen.
    Falls angeboten: *Administratorzustimmung erteilen*.
 
@@ -81,3 +82,27 @@ Gleiche Anhänge (gleicher Inhalt) werden ohnehin nur einmal gespeichert.
 
 Alle Mail-Aktionen stehen in `/api/activity` (`mail_importieren`, `mail_verknuepfen`,
 `outlook_verbinden`, `outlook_abmelden`), mit Akteur `robert` bzw. `claude`.
+
+
+## OneDrive-Scan-Eingang (`onedrive_inbox.py`)
+
+Scans mit der OneDrive-App in den Ordner **„AAA Cockpit-Eingang“** (OneDrive von
+rb@robert-beckert.de) speichern. Der Server schaut alle 10 Minuten nach
+(`ONEDRIVE_INBOX_INTERVAL`, Sekunden; `0` = aus) und tut dann Folgendes:
+
+1. Er nimmt neue Dateien **ohne Karte** in die Bibliothek auf (Quelle `onedrive-scan`).
+   Text auslesen und Vektoren macht wie immer der Worker.
+2. Danach verschiebt er sie nach **„AAA Cockpit-Eingang/übernommen“**. Den Ordner legt er bei
+   Bedarf selbst an. Gibt es den Namen dort schon, wird ein Zeitstempel angehängt.
+   **Gelöscht wird nichts.**
+3. Gleicher Inhalt (SHA-256) wird nicht doppelt gespeichert, nur verknüpft. Dateien, die
+   jünger als 2 Minuten sind, wartet er ab, weil sie vielleicht noch hochgeladen werden.
+
+Zustand und Fehler stehen in `/api/status` → `onedrive_scan` und in der Bibliothek über
+der Suchleiste („jetzt prüfen“ stößt sofort einen Lauf an). Fehlt im Token noch
+`Files.ReadWrite`, zeigen Bibliothek und „✉️ Outlook“ den Hinweis **„Bitte neu anmelden“**.
+Dann im Cockpit „✉️ Outlook“ öffnen, auf „Trennen“ und danach auf „Verbinden“ klicken.
+Bis dahin funktioniert das Mail-Lesen mit den alten Rechten weiter.
+
+Von Hand (auf dem Server als Nutzer cockpit): `python3 onedrive_inbox.py`.
+Ordnername ändern: `ONEDRIVE_INBOX=…` in der .env.

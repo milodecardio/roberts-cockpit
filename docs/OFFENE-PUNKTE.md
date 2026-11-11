@@ -10,6 +10,13 @@ Letzte DB-Sicherung: `backups/cockpit-2026-11-11-…-vor-erledigt-datum.db` (280
 - [ ] Karten-Dialog (Kopfzeile, ✕/Esc mit Rückfrage, Notiz-Popup, zugeklappte Listen, Notiz-Vorschau bei Hover/langem Tippen).
 - [ ] Karte c19 „Assessment-System ausbauen“: Claude meldet „Später“, im Board unter Eingang? Spalte prüfen.
 
+## Neu am 11.11. abends: Upload ohne Karte + OneDrive-Scan-Eingang
+- [ ] Robert: „✉️ Outlook“ → Trennen → Verbinden (holt Files.ReadWrite ins Token), dann Hinweis in 📚 weg?
+- [ ] Testscan in „AAA Cockpit-Eingang“ → nach ≤ 10 Min. in 📚 (Quelle onedrive-scan), Datei in „übernommen“.
+- [ ] 📚 Upload testen auf Mac (Ziehen), Windows, iPad (Ziehen aus Dateien-App), iPhone (Knopf → Datei auswählen → ⋯ → Dokumente scannen).
+- [ ] Später (C): Teilen-Menü am iPhone (PWA share target) → Bibliothek. Hinweis: iOS-Safari unterstützt
+      share_target für Web-Apps derzeit nicht; auf Android geht es. Für das iPhone ggf. Kurzbefehl (Shortcuts) → /api/import/file.
+
 ## Entscheidungen, die Robert treffen muss
 - [ ] **Claude im Cockpit (Variante A)**: eigenes Claude-Fenster im Cockpit über die API (ohne App-Wechsel, ohne Zusatztipp).
   Kosten ca. 1–3 Cent pro Frage mit Sonnet 5.5; Monatsgrenze z. B. 10 €. Braucht API-Schlüssel von console.anthropic.com

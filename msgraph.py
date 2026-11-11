@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Microsoft Graph für Roberts Cockpit (Etappe 5) – nur Lesezugriff auf Mails.
+"""Microsoft Graph für Roberts Cockpit (Etappe 5) – Mails nur lesen, OneDrive-Scan-Eingang.
 
 Eigene App-Registrierung „Roberts Cockpit“ im Microsoft-Konto (Entra ID):
-  - Berechtigungen (delegiert): Mail.Read, offline_access, User.Read – sonst nichts.
+  - Berechtigungen (delegiert): Mail.Read, Files.ReadWrite, offline_access, User.Read – sonst nichts.
+    Files.ReadWrite braucht nur der Scan-Eingang (onedrive_inbox.py): Dateien aus
+    „AAA Cockpit-Eingang“ lesen und nach „übernommen“ verschieben. Gelöscht wird nichts.
   - „Öffentliche Clientflows zulassen“ = Ja (Anmeldung per Gerätecode, kein Geheimnis nötig).
 In .env:  MS_CLIENT_ID=<Anwendungs-ID>   MS_TENANT=common (oder Mandanten-ID / organizations)
 
 Anmeldung per Gerätecode: Das Cockpit zeigt einen Code, Robert gibt ihn auf
 https://microsoft.com/devicelogin ein und meldet sich an. Das Cockpit erhält ein
 Refresh-Token (liegt in der Datenbank, Tabelle meta) und kann danach Mails lesen.
-Schreiben, Senden, Löschen ist mit diesen Berechtigungen technisch unmöglich.
+Mails senden, löschen oder verschieben ist mit diesen Berechtigungen technisch unmöglich.
 
 Kommandozeile (auf dem Server als Nutzer cockpit):
   python3 msgraph.py --status
@@ -30,7 +32,12 @@ import db
 
 CLIENT_ID = os.environ.get("MS_CLIENT_ID", "").strip()
 TENANT = os.environ.get("MS_TENANT", "common").strip() or "common"
-SCOPES = "https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read offline_access"
+SCOPES = ("https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Files.ReadWrite "
+          "https://graph.microsoft.com/User.Read offline_access")
+# Ältere Anmeldungen (vor dem Scan-Eingang) haben nur diese Rechte; damit bleibt Mail lesen möglich,
+# bis Robert sich neu anmeldet.
+LEGACY_SCOPES = "https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read offline_access"
+FILES_SCOPE = "Files.ReadWrite"
 LOGIN = "https://login.microsoftonline.com/%s/oauth2/v2.0" % urllib.parse.quote(TENANT)
 GRAPH = "https://graph.microsoft.com/v1.0"
 META_KEY = "ms_auth"
@@ -38,7 +45,7 @@ UA = "RobertsCockpit/1.0"
 
 
 class GraphError(Exception):
-    pass
+    code = None   # HTTP-Status von Graph, falls vorhanden
 
 
 class NotConnected(GraphError):
@@ -108,6 +115,11 @@ def access_token(path):
         res = _post_form(LOGIN + "/token", {
             "client_id": CLIENT_ID, "grant_type": "refresh_token",
             "refresh_token": data["refresh_token"], "scope": SCOPES})
+        if "access_token" not in res and not _has_scope(data.get("scope"), FILES_SCOPE):
+            # Anmeldung stammt von vor Files.ReadWrite: nicht abmelden, mit den alten Rechten weiter
+            res = _post_form(LOGIN + "/token", {
+                "client_id": CLIENT_ID, "grant_type": "refresh_token",
+                "refresh_token": data["refresh_token"], "scope": LEGACY_SCOPES})
         if "access_token" not in res:
             if res.get("error") in ("invalid_grant", "interaction_required"):
                 _save(path, None)
@@ -117,10 +129,28 @@ def access_token(path):
         return res["access_token"]
 
 
+def _has_scope(scope_str, name):
+    """scope_str wie von Microsoft geliefert, z. B. 'https://graph.microsoft.com/Mail.Read …'."""
+    for s in (scope_str or "").split():
+        if s.rsplit("/", 1)[-1].lower() in (name.lower(), name.lower() + ".all"):
+            return True
+    return False
+
+
+def has_files_access(path):
+    """True, wenn das gespeicherte Token Files.ReadWrite enthält (sonst: neu anmelden)."""
+    data = _load(path) or {}
+    return bool(data.get("refresh_token")) and _has_scope(data.get("scope"), FILES_SCOPE)
+
+
 def status(path):
     data = _load(path) or {}
     st = {"configured": configured(), "connected": bool(data.get("refresh_token")),
-          "account": data.get("account"), "since": data.get("saved_at")}
+          "account": data.get("account"), "since": data.get("saved_at"),
+          "files_access": _has_scope(data.get("scope"), FILES_SCOPE)}
+    if st["connected"] and not st["files_access"]:
+        st["relogin_hint"] = ("Bitte neu anmelden: Für den OneDrive-Scan-Eingang fehlt die "
+                              "Berechtigung Files.ReadWrite (Trennen → Verbinden).")
     lg = _login.get(path)
     if lg and lg.get("expires_at", 0) > time.time() - 300:
         st["login"] = {k: lg.get(k) for k in ("state", "user_code", "verification_uri", "error", "expires_at")}
@@ -190,12 +220,17 @@ def _poll(path, lg):
         lg.pop("device_code", None)
 
 
-# ─── Graph-Aufrufe (nur GET) ──────────────────────────────────────────
+# ─── Graph-Aufrufe ────────────────────────────────────────────────────
+# Mails: nur GET. OneDrive (Scan-Eingang): zusätzlich POST (Ordner anlegen) und PATCH (verschieben).
 
-def _request(token, rel, accept="application/json", timeout=60, max_bytes=None):
+def _request(token, rel, accept="application/json", timeout=60, max_bytes=None, method="GET", body=None):
     url = rel if rel.startswith("https://") else GRAPH + rel
-    req = urllib.request.Request(url, headers={
-        "Authorization": "Bearer " + token, "Accept": accept, "User-Agent": UA})
+    headers = {"Authorization": "Bearer " + token, "Accept": accept, "User-Agent": UA}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             if max_bytes:
@@ -209,9 +244,11 @@ def _request(token, rel, accept="application/json", timeout=60, max_bytes=None):
             msg = json.loads(e.read() or b"{}").get("error", {}).get("message", "")
         except ValueError:
             msg = ""
-        if e.code == 404:
+        if e.code == 404 and "/messages/" in url:
             raise GraphError("Mail nicht gefunden (evtl. verschoben oder gelöscht)")
-        raise GraphError("Microsoft Graph %d: %s" % (e.code, msg or e.reason))
+        err = GraphError("Microsoft Graph %d: %s" % (e.code, msg or e.reason))
+        err.code = e.code
+        raise err
     except urllib.error.URLError as e:
         raise GraphError("Keine Verbindung zu Microsoft: %s" % e.reason)
 
@@ -222,6 +259,11 @@ def _get_json(token, rel):
 
 def get_json(path, rel):
     return _get_json(access_token(path), rel)
+
+
+def send_json(path, method, rel, body):
+    """POST/PATCH mit JSON-Körper (nur für den OneDrive-Scan-Eingang)."""
+    return json.loads(_request(access_token(path), rel, method=method, body=body) or b"{}")
 
 
 def get_bytes(path, rel, max_bytes=None, timeout=120):

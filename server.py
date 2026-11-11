@@ -44,6 +44,7 @@ import mail
 import mcp_server
 import msgraph
 import oauth
+import onedrive_inbox
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Übergangsweise weiter mitgeschrieben (Rückweg + lesbares Backup).
@@ -274,7 +275,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json(200, db.recent_activity(DB_PATH, min(int(qs.get("limit", "50")), 500)))
                 return True
             if method == "GET" and p == "/api/status":
-                self._json(200, db.status(DB_PATH))
+                st = db.status(DB_PATH)
+                try:
+                    st["onedrive_scan"] = onedrive_inbox.status(DB_PATH)
+                except Exception as e:  # noqa: BLE001 – Status darf nie an OneDrive scheitern
+                    st["onedrive_scan"] = {"ok": False, "error": str(e)}
+                self._json(200, st)
+                return True
+            if method == "POST" and p == "/api/onedrive-scan/run":
+                onedrive_inbox.trigger()
+                self._json(200, {"ok": True})
                 return True
             if method == "GET" and p == "/api/library":
                 self._json(200, db.library(DB_PATH, q=qs.get("q", ""), origin=qs.get("origin", ""),
@@ -392,12 +402,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                           mime=mime, size=length, sha256=sha)
 
     def _receive_import(self):
-        """Datei aus dem Import-Skript (Mac/OneDrive/…) in die Bibliothek aufnehmen."""
+        """Datei in die Bibliothek aufnehmen (ohne Karte).
+        Import-Skript (Mac/OneDrive/…): X-Source + X-Source-Ref.
+        Upload im Browser (📚 Bibliothek): X-Source: upload, X-Source-Ref leer → Inhalt (SHA-256) ist die Referenz,
+        gleicher Inhalt wird also nur verknüpft, nicht doppelt gespeichert."""
         source = (self.headers.get("X-Source") or "").strip().lower()
         if not re.fullmatch(r"[a-z0-9_-]{1,40}", source):
             raise ValueError("X-Source fehlt oder ungültig")
         ref = urllib.parse.unquote(self.headers.get("X-Source-Ref", "")).strip()
-        if not ref:
+        if not ref and source != "upload":
             raise ValueError("X-Source-Ref fehlt")
         try:
             mtime = float(self.headers.get("X-Source-Mtime", "0"))
@@ -405,7 +418,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             mtime = 0.0
         origin_path = urllib.parse.unquote(self.headers.get("X-Origin-Path", "")).strip() or None
         sha, filename, mime, length = self._store_upload()
-        return db.add_import_doc(DB_PATH, source, ref, mtime, length, filename, mime, sha, origin_path)
+        if source == "upload":
+            if mail.is_mail_file(filename, mime) and length <= mail.MAX_MAIL:
+                with open(_blob_path(sha), "rb") as f:
+                    raw = f.read()
+                try:
+                    r = mail.import_raw(DB_PATH, FILES_DIR, raw, filename=filename,
+                                        origin_path="E-Mail (hochgeladen)", actor="robert")
+                    return {"id": r["doc_id"], "created": not r.get("already"),
+                            "attachments": len(r.get("attachments") or [])}
+                except mail.MailError:
+                    pass  # z. B. .msg ohne msgconvert → als normale Datei ablegen
+            ref = ref or "sha256:" + sha
+        r = db.add_import_doc(DB_PATH, source, ref, mtime, length, filename, mime, sha, origin_path)
+        if source == "upload":
+            db.log(DB_PATH, "robert", "bibliothek_hochladen", {"dok": r["id"], "datei": filename, "neu": r["created"]})
+        return r
 
     def _store_upload(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -717,6 +745,8 @@ def main():
         print("Datenbank angelegt, %d Karten aus %s übernommen." % (imported, STATE), flush=True)
     # Kopfdaten älterer Mails nachtragen (einmalig, im Hintergrund)
     threading.Thread(target=lambda: mail.backfill_meta(DB_PATH, FILES_DIR), daemon=True).start()
+    # OneDrive-Scan-Eingang: alle 10 Minuten „AAA Cockpit-Eingang“ abholen
+    onedrive_inbox.start(DB_PATH, FILES_DIR)
     httpd = ThreadingServer((HOST, PORT), Handler)
     if not PRODUCTION:
         webbrowser.open(URL)
